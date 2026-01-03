@@ -5,7 +5,7 @@
 
 // --- CONFIGURATION ---
 // IMPORTANT: Replace this URL with your Render.com project URL
-const SIGNALING_SERVER = 'https://my-battleship-server.onrender.com'; // ЗАМЕНИТЕ НА СВОЙ URL ЕСЛИ ДЕЛАЛИ СВОЙ СЕРВЕР
+const SIGNALING_SERVER = 'https://my-battleship-server.onrender.com'; 
 
 // ICE Servers
 const ICE_SERVERS = {
@@ -155,14 +155,14 @@ function setupSocket() {
         roomId = id;
         isHost = true;
         enterSetupPhase();
-        document.getElementById('game-status').innerHTML = `Room Code: <b>${id}</b> <br><small>Tell opponent to join this code!</small>`;
+        document.getElementById('game-status').innerHTML = `Room Code: <b>${id}</b> <br><small>Tell opponent to join!</small>`;
     });
 
     socket.on('room-joined', (id) => {
         roomId = id;
         isHost = false;
         enterSetupPhase();
-        document.getElementById('game-status').textContent = `Connected to Room: ${id}`;
+        document.getElementById('game-status').innerHTML = `Room: <b>${id}</b> <br><small>Connected. Place ships.</small>`;
     });
 
     socket.on('room-full', () => {
@@ -172,11 +172,13 @@ function setupSocket() {
 
     socket.on('ready-to-negotiate', () => {
         // Opponent has joined!
-        document.getElementById('game-status').textContent = "Opponent Connected! Place your ships.";
+        console.log("Opponent joined, starting WebRTC...");
+        document.getElementById('game-status').textContent = "Opponent here! Connecting...";
         if (isHost) startWebRTC();
     });
 
     socket.on('offer', async (offer) => {
+        console.log("Received Offer");
         if (!peerConnection) createPeerConnection();
         await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
         const answer = await peerConnection.createAnswer();
@@ -185,6 +187,7 @@ function setupSocket() {
     });
 
     socket.on('answer', async (answer) => {
+        console.log("Received Answer");
         await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
     });
 
@@ -196,13 +199,16 @@ function setupSocket() {
 function setupMenuHandlers() {
     document.getElementById('btn-create').addEventListener('click', () => {
         const id = Math.random().toString(36).substring(2, 7).toUpperCase();
+        console.log("Creating room:", id);
         socket.emit('join-room', id);
     });
 
     document.getElementById('btn-join').addEventListener('click', () => {
         const id = els.roomInput.value.toUpperCase();
-        if (id.length > 0) socket.emit('join-room', id);
-        else alert("Enter a room ID");
+        if (id.length > 0) {
+            console.log("Joining room:", id);
+            socket.emit('join-room', id);
+        } else alert("Enter a room ID");
     });
 }
 
@@ -329,23 +335,38 @@ function createShipElement(x, y, size, vertical) {
 els.btnRandom.addEventListener('click', randomizeShips);
 
 els.btnReady.addEventListener('click', () => {
-    currentState = STATE.WAITING_OPPONENT;
     els.setupControls.classList.add('hidden');
-    els.waitingScreen.classList.remove('hidden');
     els.playerGrid.classList.remove('setup-mode');
     
+    // Check if channel is already open (maybe opponent was super fast)
     if (dataChannel && dataChannel.readyState === 'open') {
         dataChannel.send(JSON.stringify({ type: 'ready' }));
+        iAmReady = true;
+        currentState = STATE.WAITING_OPPONENT;
+        els.status.textContent = "Waiting for opponent to be ready...";
         checkStartGame();
     } else {
-        if(!peerConnection) createPeerConnection();
+        // If not connected yet, we wait.
+        iAmReady = true;
+        currentState = STATE.WAITING_OPPONENT;
+        els.status.textContent = "Waiting for connection & opponent...";
+        // If peerConnection doesn't exist, we try to create it (should have happened via sockets though)
+        if(!peerConnection) console.log("Waiting for WebRTC...");
     }
 });
 
 
 // --- WebRTC ---
 
+// THIS WAS MISSING IN PREVIOUS VERSION
+function startWebRTC() {
+    createPeerConnection();
+    createOffer();
+}
+
 function createPeerConnection() {
+    if (peerConnection) return; // Don't create twice
+
     peerConnection = new RTCPeerConnection(ICE_SERVERS);
 
     peerConnection.onicecandidate = (event) => {
@@ -355,6 +376,7 @@ function createPeerConnection() {
     };
 
     peerConnection.onconnectionstatechange = () => {
+        console.log("Connection State:", peerConnection.connectionState);
         if (peerConnection.connectionState === 'disconnected') {
             els.status.textContent = "Opponent disconnected.";
             currentState = STATE.GAME_OVER;
@@ -364,7 +386,6 @@ function createPeerConnection() {
     if (isHost) {
         dataChannel = peerConnection.createDataChannel("game");
         setupDataChannel();
-        createOffer();
     } else {
         peerConnection.ondatachannel = (event) => {
             dataChannel = event.channel;
@@ -381,9 +402,10 @@ async function createOffer() {
 
 function setupDataChannel() {
     dataChannel.onopen = () => {
-        if (currentState === STATE.WAITING_OPPONENT) {
+        console.log("Data Channel OPEN");
+        if (iAmReady) {
             dataChannel.send(JSON.stringify({ type: 'ready' }));
-            checkStartGame();
+            els.status.textContent = "Connection established. Waiting for opponent...";
         }
     };
     dataChannel.onmessage = handleDataMessage;
@@ -394,6 +416,7 @@ let iAmReady = false;
 
 function handleDataMessage(event) {
     const msg = JSON.parse(event.data);
+    console.log("Received data:", msg);
     
     switch (msg.type) {
         case 'ready':
@@ -413,7 +436,7 @@ function handleDataMessage(event) {
 }
 
 function checkStartGame() {
-    if (currentState === STATE.WAITING_OPPONENT) iAmReady = true;
+    console.log(`Check Start: Me=${iAmReady}, Opp=${opponentReady}`);
     
     if (iAmReady && opponentReady) {
         // Change Layout State for Gameplay
@@ -428,6 +451,9 @@ function checkStartGame() {
             currentState = STATE.OPPONENT_TURN;
             els.status.textContent = "Enemy's Turn...";
         }
+    } else if (iAmReady && !opponentReady) {
+        els.status.textContent = "You are ready. Waiting for opponent...";
+        els.waitingScreen.classList.remove('hidden');
     }
 }
 
