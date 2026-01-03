@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Paper Battleship</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Load Socket.io Client -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body>
+
+    <div id="game-container">
+        <!-- Overlay for Connection/Menu -->
+        <div id="menu-overlay" class="paper-overlay">
+            <h1>Paper Battleship</h1>
+            <div class="menu-controls">
+                <input type="text" id="room-input" placeholder="Enter Room ID" maxlength="10">
+                <div class="button-group">
+                    <button id="btn-create">Create Room</button>
+                    <button id="btn-join">Join Room</button>
+                </div>
+                <p id="menu-status" class="status-text">Ready to deploy.</p>
+            </div>
+        </div>
+
+        <!-- Notification / Status Bar -->
+        <div id="status-bar">
+            <span id="game-status">Welcome! Place your ships.</span>
+            <button id="btn-sound" class="icon-btn">🔊</button>
+        </div>
+
+        <!-- Main Game Area -->
+        <div id="boards-wrapper">
+            <!-- Player Board -->
+            <div class="board-container" id="player-container">
+                <h2>My Fleet</h2>
+                <div class="grid" id="player-grid"></div>
+            </div>
+
+            <!-- Enemy Board -->
+            <div class="board-container" id="enemy-container">
+                <h2>Enemy Waters</h2>
+                <div class="grid" id="enemy-grid"></div>
+            </div>
+        </div>
+
+        <!-- Controls for Setup Phase -->
+        <div id="setup-controls" class="controls-area">
+            <button id="btn-rotate">Rotate Ship ↻</button>
+            <button id="btn-random">Randomize</button>
+            <button id="btn-ready" disabled>Ready for Battle!</button>
+        </div>
+        
+        <!-- Waiting Message -->
+        <div id="waiting-screen" class="hidden">
+            <p>Waiting for opponent...</p>
+            <div class="loader"></div>
+        </div>
+    </div>
+
+    <!-- Audio Elements (Fallback if assets missing, handled in JS via AudioContext preferred, but tags here for standard files) -->
+    <audio id="snd-place" src="assets/place.wav"></audio>
+    <audio id="snd-rotate" src="assets/rotate.wav"></audio>
+    <audio id="snd-hit" src="assets/hit.wav"></audio>
+    <audio id="snd-miss" src="assets/miss.wav"></audio>
+    <audio id="snd-win" src="assets/win.wav"></audio>
+
+    <script type="module" src="app.js"></script>
+<script type="module" src="/index.tsx"></script>
+</body>
+</html>
