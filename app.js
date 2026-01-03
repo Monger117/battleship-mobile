@@ -4,8 +4,7 @@
  */
 
 // --- CONFIGURATION ---
-// IMPORTANT: Replace this URL with your Render.com project URL
-const SIGNALING_SERVER = 'https://my-battleship-server.onrender.com'; 
+const SIGNALING_SERVER = 'https://battleship-server-test.onrender.com'; 
 
 // ICE Servers
 const ICE_SERVERS = {
@@ -59,6 +58,8 @@ const els = {
     btnRandom: document.getElementById('btn-random'),
     roomInput: document.getElementById('room-input'),
     waitingScreen: document.getElementById('waiting-screen'),
+    roomDisplay: document.getElementById('room-display'), // New
+    btnCopyLink: document.getElementById('btn-copy-link'), // New
     sounds: {
         place: document.getElementById('snd-place'),
         rotate: document.getElementById('snd-rotate'),
@@ -102,6 +103,13 @@ const playSynthTone = (type) => {
         osc.frequency.setValueAtTime(600, now);
         gain.gain.setValueAtTime(0.3, now);
         osc.start(now); osc.stop(now + 0.05);
+    } else if (type === 'sunk') {
+        // Deeper boom for sunk
+        osc.frequency.setValueAtTime(100, now);
+        osc.frequency.exponentialRampToValueAtTime(10, now + 0.5);
+        gain.gain.setValueAtTime(1, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+        osc.start(now); osc.stop(now + 0.5);
     }
 };
 
@@ -116,6 +124,16 @@ function init() {
     createGrids();
     setupSocket();
     setupMenuHandlers();
+    checkUrlParams();
+}
+
+function checkUrlParams() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomParam = urlParams.get('room');
+    if (roomParam) {
+        els.roomInput.value = roomParam;
+        // Optional: Auto-join could be added here, but manual click is safer for now
+    }
 }
 
 function createGrids() {
@@ -155,14 +173,14 @@ function setupSocket() {
         roomId = id;
         isHost = true;
         enterSetupPhase();
-        document.getElementById('game-status').innerHTML = `Room Code: <b>${id}</b> <br><small>Tell opponent to join!</small>`;
+        updateRoomUI(id);
     });
 
     socket.on('room-joined', (id) => {
         roomId = id;
         isHost = false;
         enterSetupPhase();
-        document.getElementById('game-status').innerHTML = `Room: <b>${id}</b> <br><small>Connected. Place ships.</small>`;
+        updateRoomUI(id);
     });
 
     socket.on('room-full', () => {
@@ -171,14 +189,12 @@ function setupSocket() {
     });
 
     socket.on('ready-to-negotiate', () => {
-        // Opponent has joined!
         console.log("Opponent joined, starting WebRTC...");
-        document.getElementById('game-status').textContent = "Opponent here! Connecting...";
+        document.getElementById('game-status').textContent = "Opponent found! Connecting...";
         if (isHost) startWebRTC();
     });
 
     socket.on('offer', async (offer) => {
-        console.log("Received Offer");
         if (!peerConnection) createPeerConnection();
         await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
         const answer = await peerConnection.createAnswer();
@@ -187,7 +203,6 @@ function setupSocket() {
     });
 
     socket.on('answer', async (answer) => {
-        console.log("Received Answer");
         await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
     });
 
@@ -196,19 +211,33 @@ function setupSocket() {
     });
 }
 
+function updateRoomUI(id) {
+    els.roomDisplay.classList.remove('hidden');
+    els.roomDisplay.querySelector('span').textContent = id;
+    
+    // Update URL without reloading to make sharing easier
+    const newUrl = window.location.protocol + "//" + window.location.host + window.location.pathname + '?room=' + id;
+    window.history.pushState({path:newUrl},'',newUrl);
+}
+
 function setupMenuHandlers() {
     document.getElementById('btn-create').addEventListener('click', () => {
         const id = Math.random().toString(36).substring(2, 7).toUpperCase();
-        console.log("Creating room:", id);
         socket.emit('join-room', id);
     });
 
     document.getElementById('btn-join').addEventListener('click', () => {
         const id = els.roomInput.value.toUpperCase();
         if (id.length > 0) {
-            console.log("Joining room:", id);
             socket.emit('join-room', id);
         } else alert("Enter a room ID");
+    });
+    
+    els.btnCopyLink.addEventListener('click', () => {
+        const url = window.location.href;
+        navigator.clipboard.writeText(url).then(() => {
+            alert("Link copied! Send it to your friend.");
+        });
     });
 }
 
@@ -216,16 +245,14 @@ function setupMenuHandlers() {
 
 function enterSetupPhase() {
     currentState = STATE.SETUP;
-    // Add CSS class to body to handle responsive layout (hide enemy board)
     els.body.classList.add('state-setup');
-    
     els.menuOverlay.style.display = 'none';
     els.playerGrid.classList.add('setup-mode');
     randomizeShips();
 }
 
 function randomizeShips() {
-    // Clear
+    // Clear DOM and Data
     document.querySelectorAll('.ship').forEach(s => s.remove());
     myGrid = Array(10).fill(null).map(() => Array(10).fill(null));
     myShips = [];
@@ -235,55 +262,99 @@ function randomizeShips() {
         for (let i=0; i<type.count; i++) shipsToPlace.push(type.size);
     });
 
-    shipsToPlace.forEach(size => {
-        let placed = false;
-        let attempts = 0;
-        while (!placed && attempts < 100) {
-            attempts++;
-            const x = Math.floor(Math.random() * 10);
-            const y = Math.floor(Math.random() * 10);
-            const vert = Math.random() > 0.5;
-            if (canPlaceShip(x, y, size, vert, myGrid)) {
-                placeShipData(x, y, size, vert);
-                createShipElement(x, y, size, vert);
-                placed = true;
+    // Try to place all ships. If fails, retry the whole board up to X times
+    let attempts = 0;
+    let success = false;
+    
+    while (!success && attempts < 500) {
+        attempts++;
+        // Temp grid for this attempt
+        let tempGrid = Array(10).fill(null).map(() => Array(10).fill(null));
+        let tempShips = [];
+        let placementFailed = false;
+
+        for (let size of shipsToPlace) {
+            let placed = false;
+            let shipAttempts = 0;
+            while (!placed && shipAttempts < 100) {
+                shipAttempts++;
+                const x = Math.floor(Math.random() * 10);
+                const y = Math.floor(Math.random() * 10);
+                const vert = Math.random() > 0.5;
+                
+                if (canPlaceShip(x, y, size, vert, tempGrid)) {
+                    // Place in temp data
+                    const shipObj = { x, y, size, vertical: vert, hits: 0, sunk: false };
+                    tempShips.push(shipObj);
+                    for (let i = 0; i < size; i++) {
+                        const cx = vert ? x : x + i;
+                        const cy = vert ? y + i : y;
+                        tempGrid[cx][cy] = shipObj;
+                    }
+                    placed = true;
+                }
+            }
+            if (!placed) {
+                placementFailed = true;
+                break;
             }
         }
-    });
+
+        if (!placementFailed) {
+            success = true;
+            // Apply to real game
+            myGrid = tempGrid;
+            myShips = tempShips;
+            // Render
+            myShips.forEach(s => createShipElement(s.x, s.y, s.size, s.vertical));
+        }
+    }
     
-    els.btnReady.disabled = false;
-    playSound('place');
+    if(!success) {
+        console.warn("Could not randomize ships. Try again.");
+        // Fallback or just let user click again
+    } else {
+        els.btnReady.disabled = false;
+        playSound('place');
+    }
 }
 
+// UPDATED: Strict spacing rules (1 cell gap)
 function canPlaceShip(x, y, size, vertical, grid) {
+    // 1. Boundary check
     if (vertical) { if (y + size > 10) return false; } 
     else { if (x + size > 10) return false; }
 
+    // 2. Overlap and Gap check
     for (let i = 0; i < size; i++) {
         const cx = vertical ? x : x + i;
         const cy = vertical ? y + i : y;
-        if (grid[cx][cy] !== null) return false;
+
+        // Check the cell itself and all 8 neighbors
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                const nx = cx + dx;
+                const ny = cy + dy;
+
+                // Check board bounds
+                if (nx >= 0 && nx < 10 && ny >= 0 && ny < 10) {
+                    if (grid[nx][ny] !== null) return false;
+                }
+            }
+        }
     }
     return true;
 }
 
 function placeShipData(x, y, size, vertical) {
-    const shipObj = { x, y, size, vertical, hits: 0, sunk: false };
-    myShips.push(shipObj);
-    for (let i = 0; i < size; i++) {
-        const cx = vertical ? x : x + i;
-        const cy = vertical ? y + i : y;
-        myGrid[cx][cy] = shipObj;
-    }
+    // Note: randomizeShips handles the full grid generation now to prevent bugs.
+    // This is kept for manual drag/drop future implementation
 }
 
 function createShipElement(x, y, size, vertical) {
     const ship = document.createElement('div');
     ship.classList.add('ship', `ship-${size}`);
     if (vertical) ship.classList.add('vertical');
-    
-    // Positioning using CSS Grid Logic (Percentages)
-    // The grid is 10x10. Each cell is 10%.
     
     ship.style.left = `${x * 10}%`;
     ship.style.top = `${y * 10}%`;
@@ -296,87 +367,93 @@ function createShipElement(x, y, size, vertical) {
         ship.style.height = '10%';
     }
 
-    // Touch/Click to Rotate/Delete/Move
+    // Tap to rotate logic
     ship.addEventListener('click', (e) => {
         if (currentState !== STATE.SETUP) return;
         e.stopPropagation();
         
-        // Find and Remove old
+        // Remove current ship from data
         const shipIndex = myShips.findIndex(s => s.x === x && s.y === y && s.vertical === vertical);
-        if(shipIndex > -1) {
-            const s = myShips[shipIndex];
-            for(let i=0; i<s.size; i++) {
-                const cx = s.vertical ? s.x : s.x+i;
-                const cy = s.vertical ? s.y+i : s.y;
+        if (shipIndex === -1) return;
+        
+        // Temporarily clear grid spots for this ship so we can check if rotation fits
+        const currentShip = myShips[shipIndex];
+        const tempGrid = myGrid.map(row => [...row]); // Deep copy rows
+        
+        // Remove ship from temp grid
+        for(let i=0; i<currentShip.size; i++) {
+            const cx = currentShip.vertical ? currentShip.x : currentShip.x+i;
+            const cy = currentShip.vertical ? currentShip.y+i : currentShip.y;
+            tempGrid[cx][cy] = null;
+        }
+
+        const newVertical = !vertical;
+        
+        // Check if rotated ship fits in the temp grid (which has the current ship removed)
+        if (canPlaceShip(x, y, size, newVertical, tempGrid)) {
+            // It fits! Remove old DOM
+            ship.remove();
+            // Remove from real data
+            myShips.splice(shipIndex, 1);
+            // Clear real grid
+            for(let i=0; i<currentShip.size; i++) {
+                const cx = currentShip.vertical ? currentShip.x : currentShip.x+i;
+                const cy = currentShip.vertical ? currentShip.y+i : currentShip.y;
                 myGrid[cx][cy] = null;
             }
-            myShips.splice(shipIndex, 1);
-        }
-        ship.remove();
 
-        // Try to Rotate
-        const newVertical = !vertical;
-        if (canPlaceShip(x, y, size, newVertical, myGrid)) {
-            placeShipData(x, y, size, newVertical);
+            // Place new
+            const newShipObj = { x, y, size, vertical: newVertical, hits: 0, sunk: false };
+            myShips.push(newShipObj);
+            for (let i = 0; i < size; i++) {
+                const cx = newVertical ? x : x + i;
+                const cy = newVertical ? y + i : y;
+                myGrid[cx][cy] = newShipObj;
+            }
             createShipElement(x, y, size, newVertical);
             playSound('rotate');
         } else {
-            // Can't rotate? Put it back original
-            placeShipData(x, y, size, vertical);
-            createShipElement(x, y, size, vertical);
-            // Visual feedback failure?
+            // Shake effect or feedback?
+            ship.style.transform = "translateX(5px)";
+            setTimeout(() => ship.style.transform = "none", 100);
         }
     });
 
     els.playerGrid.appendChild(ship);
 }
 
-// Button Listeners
 els.btnRandom.addEventListener('click', randomizeShips);
-
 els.btnReady.addEventListener('click', () => {
     els.setupControls.classList.add('hidden');
     els.playerGrid.classList.remove('setup-mode');
     
-    // Check if channel is already open (maybe opponent was super fast)
     if (dataChannel && dataChannel.readyState === 'open') {
         dataChannel.send(JSON.stringify({ type: 'ready' }));
         iAmReady = true;
         currentState = STATE.WAITING_OPPONENT;
-        els.status.textContent = "Waiting for opponent to be ready...";
+        els.status.textContent = "Waiting for opponent...";
         checkStartGame();
     } else {
-        // If not connected yet, we wait.
         iAmReady = true;
         currentState = STATE.WAITING_OPPONENT;
-        els.status.textContent = "Waiting for connection & opponent...";
-        // If peerConnection doesn't exist, we try to create it (should have happened via sockets though)
-        if(!peerConnection) console.log("Waiting for WebRTC...");
+        els.status.textContent = "Waiting for connection...";
     }
 });
 
 
 // --- WebRTC ---
-
-// THIS WAS MISSING IN PREVIOUS VERSION
 function startWebRTC() {
     createPeerConnection();
     createOffer();
 }
 
 function createPeerConnection() {
-    if (peerConnection) return; // Don't create twice
-
+    if (peerConnection) return;
     peerConnection = new RTCPeerConnection(ICE_SERVERS);
-
     peerConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-            socket.emit('ice-candidate', { roomId, candidate: event.candidate });
-        }
+        if (event.candidate) socket.emit('ice-candidate', { roomId, candidate: event.candidate });
     };
-
     peerConnection.onconnectionstatechange = () => {
-        console.log("Connection State:", peerConnection.connectionState);
         if (peerConnection.connectionState === 'disconnected') {
             els.status.textContent = "Opponent disconnected.";
             currentState = STATE.GAME_OVER;
@@ -402,7 +479,6 @@ async function createOffer() {
 
 function setupDataChannel() {
     dataChannel.onopen = () => {
-        console.log("Data Channel OPEN");
         if (iAmReady) {
             dataChannel.send(JSON.stringify({ type: 'ready' }));
             els.status.textContent = "Connection established. Waiting for opponent...";
@@ -416,8 +492,6 @@ let iAmReady = false;
 
 function handleDataMessage(event) {
     const msg = JSON.parse(event.data);
-    console.log("Received data:", msg);
-    
     switch (msg.type) {
         case 'ready':
             opponentReady = true;
@@ -427,7 +501,7 @@ function handleDataMessage(event) {
             handleIncomingFire(msg.x, msg.y);
             break;
         case 'result':
-            handleFireResult(msg.x, msg.y, msg.hit, msg.sunk);
+            handleFireResult(msg.x, msg.y, msg.hit, msg.sunk, msg.ship);
             break;
         case 'gameover':
             endGame(msg.winner === 'opponent'); 
@@ -436,13 +510,9 @@ function handleDataMessage(event) {
 }
 
 function checkStartGame() {
-    console.log(`Check Start: Me=${iAmReady}, Opp=${opponentReady}`);
-    
     if (iAmReady && opponentReady) {
-        // Change Layout State for Gameplay
         els.body.classList.remove('state-setup');
         els.body.classList.add('state-playing');
-        
         els.waitingScreen.classList.add('hidden');
         if (isHost) {
             currentState = STATE.MY_TURN;
@@ -451,9 +521,6 @@ function checkStartGame() {
             currentState = STATE.OPPONENT_TURN;
             els.status.textContent = "Enemy's Turn...";
         }
-    } else if (iAmReady && !opponentReady) {
-        els.status.textContent = "You are ready. Waiting for opponent...";
-        els.waitingScreen.classList.remove('hidden');
     }
 }
 
@@ -472,49 +539,95 @@ function handleIncomingFire(x, y) {
     const cellObj = myGrid[x][y];
     let isHit = false;
     let isSunk = false;
+    let sunkShipData = null;
 
     if (cellObj && typeof cellObj === 'object') {
         isHit = true;
         cellObj.hits++;
-        playSound('hit');
         addMarker(els.playerGrid, x, y, 'hit');
         
         if (cellObj.hits >= cellObj.size) {
             cellObj.sunk = true;
             isSunk = true;
+            playSound('sunk');
+            // Prepare data to send to opponent so they can draw the sunk ship
+            sunkShipData = { x: cellObj.x, y: cellObj.y, size: cellObj.size, vertical: cellObj.vertical };
+            
             if (myShips.every(s => s.sunk)) {
-                dataChannel.send(JSON.stringify({ type: 'result', x, y, hit: true, sunk: true }));
+                dataChannel.send(JSON.stringify({ 
+                    type: 'result', x, y, hit: true, sunk: true, ship: sunkShipData 
+                }));
                 dataChannel.send(JSON.stringify({ type: 'gameover', winner: 'opponent' }));
                 endGame(false);
                 return;
             }
+        } else {
+            playSound('hit');
         }
     } else {
         playSound('miss');
         addMarker(els.playerGrid, x, y, 'miss');
     }
 
-    dataChannel.send(JSON.stringify({ type: 'result', x, y, hit: isHit, sunk: isSunk }));
+    dataChannel.send(JSON.stringify({ 
+        type: 'result', x, y, hit: isHit, sunk: isSunk, ship: sunkShipData 
+    }));
     currentState = STATE.MY_TURN;
     els.status.textContent = "Your Turn! Fire!";
 }
 
-function handleFireResult(x, y, hit, sunk) {
+function handleFireResult(x, y, hit, sunk, shipData) {
     enemyGrid[x][y] = hit ? 'H' : 'M';
-    addMarker(els.enemyGrid, x, y, hit ? 'hit' : 'miss');
     
-    if (hit) {
+    if (sunk && shipData) {
+        // Mark the specific hit that caused the sink
+        addMarker(els.enemyGrid, x, y, 'hit'); // Add hit first
+        
+        // Now visually reveal the sunk ship on the enemy board
+        // We can either draw a ship element OR change markers to 'sunk' style
+        drawEnemySunkShip(shipData);
+        playSound('sunk');
+        els.status.textContent = "SHIP SUNK! Enemy's Turn...";
+    } else if (hit) {
         playSound('hit');
-        els.status.textContent = sunk ? "SUNK! Enemy's Turn..." : "HIT! Enemy's Turn...";
+        addMarker(els.enemyGrid, x, y, 'hit');
+        els.status.textContent = "HIT! Enemy's Turn...";
     } else {
         playSound('miss');
+        addMarker(els.enemyGrid, x, y, 'miss');
         els.status.textContent = "MISS. Enemy's Turn...";
     }
     currentState = STATE.OPPONENT_TURN;
 }
 
+function drawEnemySunkShip(ship) {
+    // 1. Visually add the ship (like in setup) but on enemy grid
+    const shipEl = document.createElement('div');
+    shipEl.classList.add('ship', `ship-${ship.size}`, 'sunk-ship');
+    if (ship.vertical) shipEl.classList.add('vertical');
+    
+    shipEl.style.left = `${ship.x * 10}%`;
+    shipEl.style.top = `${ship.y * 10}%`;
+    
+    if (ship.vertical) {
+        shipEl.style.width = '10%'; 
+        shipEl.style.height = `${ship.size * 10}%`;
+    } else {
+        shipEl.style.width = `${ship.size * 10}%`;
+        shipEl.style.height = '10%';
+    }
+    els.enemyGrid.appendChild(shipEl);
+
+    // 2. Update markers covered by this ship to be darker/invisible?
+    // Actually, keeping the red Hit markers ON TOP of the ship looks good (classic style)
+}
+
 function addMarker(gridEl, x, y, type) {
     const cell = gridEl.querySelector(`.cell[data-x="${x}"][data-y="${y}"]`);
+    // Remove existing if any
+    const existing = cell.querySelector('.marker');
+    if (existing) existing.remove();
+    
     const marker = document.createElement('div');
     marker.classList.add('marker', type);
     cell.appendChild(marker);
