@@ -11,27 +11,35 @@
     -webkit-tap-highlight-color: transparent;
 }
 
-body {
+html, body {
     margin: 0;
     padding: 0;
+    width: 100%;
+    /* Use dynamic viewport height to account for mobile address bars */
+    height: 100dvh; 
+    overflow: hidden; /* Prevent scrolling */
+}
+
+body {
     background-color: var(--bg-color);
     font-family: 'Courier New', Courier, monospace;
     background-image: 
         linear-gradient(var(--line-color) 1px, transparent 1px),
         linear-gradient(90deg, var(--line-color) 1px, transparent 1px);
     background-size: 20px 20px;
-    height: 100vh;
-    width: 100vw;
     display: flex;
     flex-direction: column;
-    align-items: center;
     color: var(--ink-blue);
-    overflow: hidden;
 }
 
 /* Typography */
 h1 { font-size: 1.5rem; margin: 10px 0; text-align: center; }
-h2 { font-size: 1rem; margin: 5px 0; text-align: center; width: 100%; }
+h2 { 
+    font-size: 0.9rem; 
+    margin: 2px 0; 
+    text-align: center; 
+    white-space: nowrap;
+}
 
 /* Menu Overlay */
 .paper-overlay {
@@ -72,20 +80,20 @@ input {
 
 button {
     font-family: inherit;
-    font-size: 1.1rem;
+    font-size: 1rem;
     font-weight: bold;
-    padding: 12px 24px;
+    padding: 10px 20px;
     background: white;
     color: var(--ink-blue);
     border: 2px solid var(--ink-blue);
     cursor: pointer;
     border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
-    width: 100%;
+    touch-action: manipulation;
 }
 
 button:active {
     background: #e0e0e0;
-    transform: scale(0.98);
+    transform: scale(0.95);
 }
 
 button:disabled {
@@ -94,7 +102,8 @@ button:disabled {
 
 #btn-create { background: var(--ink-blue); color: white; border-color: var(--ink-blue); }
 
-/* Game Container */
+/* --- MAIN LAYOUT STRUCTURE --- */
+
 #game-container {
     width: 100%;
     height: 100%;
@@ -103,58 +112,71 @@ button:disabled {
     position: relative;
 }
 
+/* Top Bar: Fixed height, flex-shrink 0 */
 #status-bar {
-    flex: 0 0 auto;
-    padding: 8px;
+    flex: 0 0 auto; 
+    height: 40px;
+    padding: 0 10px;
     background: rgba(255,255,255,0.9);
     border-bottom: 2px solid var(--ink-blue);
     display: flex;
     justify-content: space-between;
     align-items: center;
-    font-size: 0.9rem;
+    font-size: 0.8rem;
     z-index: 10;
 }
 
-/* Boards Wrapper */
+/* Middle: Grows to fill space */
 #boards-wrapper {
-    flex: 1 1 auto;
+    flex: 1 1 auto; /* Grow to fill available vertical space */
     display: flex;
     justify-content: center;
     align-items: center;
     gap: 10px;
-    padding: 10px;
-    overflow: auto;
+    padding: 5px;
+    overflow: hidden; /* Important so grid doesn't overflow parent */
+    width: 100%;
 }
 
-/* Board Container */
+/* Bottom Controls: Fixed height, flex-shrink 0 */
+#setup-controls {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 10px;
+    padding: 8px;
+    width: 100%;
+    justify-content: center;
+    background: rgba(255,255,255,0.95);
+    border-top: 2px solid var(--ink-blue);
+    z-index: 20;
+}
+
+/* --- BOARD & GRID --- */
+
 .board-container {
     display: flex;
     flex-direction: column;
     align-items: center;
-    /* This ensures grid doesn't explode in size */
-    width: 100%; 
+    justify-content: center;
+    position: relative;
 }
 
-/* Grid System */
 .grid {
     display: grid;
     grid-template-columns: repeat(10, 1fr);
-    /* CRITICAL FIX: Make grid perfectly square */
     aspect-ratio: 1 / 1; 
-    border: 3px solid var(--ink-blue);
-    background: rgba(255,255,255,0.8);
+    border: 2px solid var(--ink-blue);
+    background: rgba(255,255,255,0.85);
     position: relative;
-    box-shadow: 5px 5px 0 rgba(0,0,0,0.1);
+    /* Shadow helps separate it from background */
+    box-shadow: 2px 2px 0 rgba(27, 79, 156, 0.2); 
 }
 
 .cell {
     width: 100%;
     height: 100%;
-    border: 0.5px solid rgba(27, 79, 156, 0.25);
+    border: 0.5px solid rgba(27, 79, 156, 0.2);
     position: relative;
-    display: flex;
-    justify-content: center;
-    align-items: center;
 }
 
 /* Ships */
@@ -170,9 +192,9 @@ button:disabled {
 
 /* Markers */
 .marker {
-    width: 90%;
-    height: 90%;
-    background-size: contain;
+    width: 100%;
+    height: 100%;
+    background-size: 80%;
     background-repeat: no-repeat;
     background-position: center;
 }
@@ -180,71 +202,63 @@ button:disabled {
 .hit { background-image: url('assets/hit.svg'); }
 .miss { background-image: url('assets/miss.svg'); }
 
-/* Setup Controls */
-#setup-controls {
-    flex: 0 0 auto;
-    display: flex;
-    gap: 8px;
-    padding: 10px;
-    width: 100%;
-    justify-content: center;
-    background: rgba(255,255,255,0.8);
-}
-
-#setup-controls button {
-    font-size: 0.9rem;
-    padding: 8px 12px;
-}
-
-/* Utility */
 .hidden { display: none !important; }
 
 /* --- RESPONSIVE LOGIC --- */
 
-/* Portrait Mode (Vertical) */
+/* PORTRAIT (Vertical Phone) */
 @media (orientation: portrait) {
     #boards-wrapper {
         flex-direction: column;
         justify-content: start;
+        padding-top: 20px;
     }
 
     .board-container {
-        max-width: 90vw;
-    }
-
-    /* During SETUP, hide enemy board */
-    body.state-setup #enemy-container {
-        display: none;
+        width: 90vw;
+        height: auto;
     }
     
-    body.state-playing #boards-wrapper {
-        justify-content: center;
-        gap: 5px;
+    .grid {
+        width: 100%;
     }
 
-    body.state-playing .board-container {
-        width: 80%;
+    /* Setup Phase: Only show player board */
+    body.state-setup #enemy-container { display: none; }
+    
+    /* Play Phase: Show both, make smaller */
+    body.state-playing #boards-wrapper {
+        justify-content: start;
+        gap: 15px;
     }
+    body.state-playing .board-container { width: 75vw; }
 }
 
-/* Landscape Mode */
+/* LANDSCAPE (Horizontal Phone - Your screenshots) */
 @media (orientation: landscape) {
     #boards-wrapper {
         flex-direction: row;
         align-items: center;
+        /* Ensure we don't overflow horizontally */
+        max-width: 100%; 
     }
 
-    /* Fix: Size based on viewport height so it fits on screen */
     .board-container {
+        /* Height logic: Fill wrapper height but leave space for H2 title */
+        height: 100%; 
+        width: auto; /* Let aspect ratio determine width */
+        max-width: 48%; /* Prevent them from overlapping */
+    }
+
+    .grid {
+        /* This is the magic. Grid height fills the container minus the title text */
+        height: calc(100% - 25px); 
         width: auto;
-        height: 70vh; /* Use 70% of screen height */
-        aspect-ratio: 1 / 1.1; /* Slight adjustment for header text */
     }
     
-    .grid {
-        height: 100%;
-        width: auto; /* Let height drive the width via aspect-ratio */
-    }
+    /* Make text smaller in landscape to save space */
+    #status-bar { font-size: 0.8rem; padding: 0 15px; }
+    #setup-controls button { padding: 8px 15px; font-size: 0.9rem; }
 }
 
 /* Loader */
