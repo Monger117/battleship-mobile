@@ -166,7 +166,7 @@ button:disabled {
     grid-template-columns: repeat(10, 1fr);
     aspect-ratio: 1 / 1; 
     border: 2px solid var(--ink-blue);
-    background: rgba(255,255,255,0.85);
+    background: rgba(255,255,255,0.5); /* More transparent to see paper texture */
     position: relative;
     /* Shadow helps separate it from background */
     box-shadow: 2px 2px 0 rgba(27, 79, 156, 0.2); 
@@ -177,6 +177,7 @@ button:disabled {
     height: 100%;
     border: 0.5px solid rgba(27, 79, 156, 0.2);
     position: relative;
+    z-index: 1;
 }
 
 /* Ships */
@@ -185,9 +186,20 @@ button:disabled {
     background-repeat: no-repeat;
     background-position: center;
     background-size: 100% 100%; 
-    z-index: 5;
+    z-index: 2; /* Above cells, below markers if possible, but markers are inside cells */
     pointer-events: auto;
     transition: top 0.1s, left 0.1s;
+    
+    /* FIX: Add semi-transparent white bg so ink drawing pops against grid */
+    background-color: rgba(255, 255, 255, 0.6); 
+    border-radius: 5px; /* Slight roundness */
+}
+
+/* When a ship is sunk on enemy board, it should look distinct */
+.sunk-ship {
+    opacity: 0.7;
+    filter: grayscale(100%) contrast(150%);
+    border: 2px dashed var(--ink-red);
 }
 
 /* Markers */
@@ -197,6 +209,9 @@ button:disabled {
     background-size: 80%;
     background-repeat: no-repeat;
     background-position: center;
+    z-index: 10; /* Markers must be above ships */
+    position: absolute;
+    top: 0; left: 0;
 }
 
 .hit { background-image: url('assets/hit.svg'); }
