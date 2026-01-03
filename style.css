@@ -3,7 +3,6 @@
     --line-color: #b0c4de;
     --ink-blue: #1b4f9c;
     --ink-red: #d4343a;
-    --grid-max-size: 400px; /* Максимальный размер доски */
 }
 
 * {
@@ -17,7 +16,6 @@ body {
     padding: 0;
     background-color: var(--bg-color);
     font-family: 'Courier New', Courier, monospace;
-    /* Эффект тетрадного листа */
     background-image: 
         linear-gradient(var(--line-color) 1px, transparent 1px),
         linear-gradient(90deg, var(--line-color) 1px, transparent 1px);
@@ -125,7 +123,7 @@ button:disabled {
     align-items: center;
     gap: 10px;
     padding: 10px;
-    overflow: auto; /* Allow scroll if screen really small */
+    overflow: auto;
 }
 
 /* Board Container */
@@ -133,16 +131,15 @@ button:disabled {
     display: flex;
     flex-direction: column;
     align-items: center;
-    width: 100%;
-    max-width: var(--grid-max-size);
+    /* This ensures grid doesn't explode in size */
+    width: 100%; 
 }
 
-/* Grid System - Fixed Aspect Ratio */
+/* Grid System */
 .grid {
     display: grid;
     grid-template-columns: repeat(10, 1fr);
-    /* Force square cells relative to container width */
-    width: 100%;
+    /* CRITICAL FIX: Make grid perfectly square */
     aspect-ratio: 1 / 1; 
     border: 3px solid var(--ink-blue);
     background: rgba(255,255,255,0.8);
@@ -152,8 +149,8 @@ button:disabled {
 
 .cell {
     width: 100%;
-    height: 100%; /* Fill the grid track */
-    border: 0.5px solid rgba(27, 79, 156, 0.25); /* Thinner internal lines */
+    height: 100%;
+    border: 0.5px solid rgba(27, 79, 156, 0.25);
     position: relative;
     display: flex;
     justify-content: center;
@@ -165,18 +162,10 @@ button:disabled {
     position: absolute;
     background-repeat: no-repeat;
     background-position: center;
-    /* Ensure SVG fills the box exactly */
     background-size: 100% 100%; 
     z-index: 5;
-    pointer-events: auto; /* Enable clicks for drag logic */
+    pointer-events: auto;
     transition: top 0.1s, left 0.1s;
-}
-
-.ship.vertical {
-    transform-origin: top left;
-    /* Rotation logic is handled via width/height swap in JS, 
-       but if using transform rotate, we need care. 
-       Current JS swaps W/H, so no CSS rotate needed. */
 }
 
 /* Markers */
@@ -219,23 +208,22 @@ button:disabled {
         justify-content: start;
     }
 
-    /* During SETUP, hide enemy board to give space to player board */
+    .board-container {
+        max-width: 90vw;
+    }
+
+    /* During SETUP, hide enemy board */
     body.state-setup #enemy-container {
         display: none;
     }
     
-    body.state-setup #player-container {
-        max-width: 90vw; /* Make it big */
-    }
-
-    /* During GAME, show both but smaller */
     body.state-playing #boards-wrapper {
         justify-content: center;
         gap: 5px;
     }
 
     body.state-playing .board-container {
-        width: 80%; /* Shrink to fit two */
+        width: 80%;
     }
 }
 
@@ -246,9 +234,16 @@ button:disabled {
         align-items: center;
     }
 
+    /* Fix: Size based on viewport height so it fits on screen */
     .board-container {
-        width: 45vh; /* Scale based on height */
-        max-width: 45vw;
+        width: auto;
+        height: 70vh; /* Use 70% of screen height */
+        aspect-ratio: 1 / 1.1; /* Slight adjustment for header text */
+    }
+    
+    .grid {
+        height: 100%;
+        width: auto; /* Let height drive the width via aspect-ratio */
     }
 }
 
