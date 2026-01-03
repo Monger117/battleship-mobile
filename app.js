@@ -4,7 +4,7 @@
  */
 
 // --- CONFIGURATION ---
-const SIGNALING_SERVER = 'https://battleship-server-test.onrender.com'; 
+const SIGNALING_SERVER = 'https://my-battleship-server.onrender.com'; 
 
 // ICE Servers
 const ICE_SERVERS = {
