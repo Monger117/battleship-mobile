@@ -1,0 +1,265 @@
+:root {
+    --bg-color: #fdfbf7;
+    --line-color: #b0c4de;
+    --ink-blue: #1b4f9c;
+    --ink-red: #d4343a;
+    --grid-max-size: 400px; /* Максимальный размер доски */
+}
+
+* {
+    box-sizing: border-box;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    background-color: var(--bg-color);
+    font-family: 'Courier New', Courier, monospace;
+    /* Эффект тетрадного листа */
+    background-image: 
+        linear-gradient(var(--line-color) 1px, transparent 1px),
+        linear-gradient(90deg, var(--line-color) 1px, transparent 1px);
+    background-size: 20px 20px;
+    height: 100vh;
+    width: 100vw;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: var(--ink-blue);
+    overflow: hidden;
+}
+
+/* Typography */
+h1 { font-size: 1.5rem; margin: 10px 0; text-align: center; }
+h2 { font-size: 1rem; margin: 5px 0; text-align: center; width: 100%; }
+
+/* Menu Overlay */
+.paper-overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(253, 251, 247, 0.98);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    border: 4px solid var(--ink-blue);
+    padding: 20px;
+}
+
+.menu-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    align-items: center;
+    width: 100%;
+    max-width: 300px;
+}
+
+input {
+    font-family: inherit;
+    font-size: 1.5rem;
+    padding: 10px;
+    border: 2px solid var(--ink-blue);
+    background: white;
+    color: var(--ink-blue);
+    outline: none;
+    text-transform: uppercase;
+    text-align: center;
+    width: 100%;
+    border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
+}
+
+button {
+    font-family: inherit;
+    font-size: 1.1rem;
+    font-weight: bold;
+    padding: 12px 24px;
+    background: white;
+    color: var(--ink-blue);
+    border: 2px solid var(--ink-blue);
+    cursor: pointer;
+    border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
+    width: 100%;
+}
+
+button:active {
+    background: #e0e0e0;
+    transform: scale(0.98);
+}
+
+button:disabled {
+    opacity: 0.5;
+}
+
+#btn-create { background: var(--ink-blue); color: white; border-color: var(--ink-blue); }
+
+/* Game Container */
+#game-container {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+#status-bar {
+    flex: 0 0 auto;
+    padding: 8px;
+    background: rgba(255,255,255,0.9);
+    border-bottom: 2px solid var(--ink-blue);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.9rem;
+    z-index: 10;
+}
+
+/* Boards Wrapper */
+#boards-wrapper {
+    flex: 1 1 auto;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    overflow: auto; /* Allow scroll if screen really small */
+}
+
+/* Board Container */
+.board-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    max-width: var(--grid-max-size);
+}
+
+/* Grid System - Fixed Aspect Ratio */
+.grid {
+    display: grid;
+    grid-template-columns: repeat(10, 1fr);
+    /* Force square cells relative to container width */
+    width: 100%;
+    aspect-ratio: 1 / 1; 
+    border: 3px solid var(--ink-blue);
+    background: rgba(255,255,255,0.8);
+    position: relative;
+    box-shadow: 5px 5px 0 rgba(0,0,0,0.1);
+}
+
+.cell {
+    width: 100%;
+    height: 100%; /* Fill the grid track */
+    border: 0.5px solid rgba(27, 79, 156, 0.25); /* Thinner internal lines */
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+/* Ships */
+.ship {
+    position: absolute;
+    background-repeat: no-repeat;
+    background-position: center;
+    /* Ensure SVG fills the box exactly */
+    background-size: 100% 100%; 
+    z-index: 5;
+    pointer-events: auto; /* Enable clicks for drag logic */
+    transition: top 0.1s, left 0.1s;
+}
+
+.ship.vertical {
+    transform-origin: top left;
+    /* Rotation logic is handled via width/height swap in JS, 
+       but if using transform rotate, we need care. 
+       Current JS swaps W/H, so no CSS rotate needed. */
+}
+
+/* Markers */
+.marker {
+    width: 90%;
+    height: 90%;
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+.hit { background-image: url('assets/hit.svg'); }
+.miss { background-image: url('assets/miss.svg'); }
+
+/* Setup Controls */
+#setup-controls {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 8px;
+    padding: 10px;
+    width: 100%;
+    justify-content: center;
+    background: rgba(255,255,255,0.8);
+}
+
+#setup-controls button {
+    font-size: 0.9rem;
+    padding: 8px 12px;
+}
+
+/* Utility */
+.hidden { display: none !important; }
+
+/* --- RESPONSIVE LOGIC --- */
+
+/* Portrait Mode (Vertical) */
+@media (orientation: portrait) {
+    #boards-wrapper {
+        flex-direction: column;
+        justify-content: start;
+    }
+
+    /* During SETUP, hide enemy board to give space to player board */
+    body.state-setup #enemy-container {
+        display: none;
+    }
+    
+    body.state-setup #player-container {
+        max-width: 90vw; /* Make it big */
+    }
+
+    /* During GAME, show both but smaller */
+    body.state-playing #boards-wrapper {
+        justify-content: center;
+        gap: 5px;
+    }
+
+    body.state-playing .board-container {
+        width: 80%; /* Shrink to fit two */
+    }
+}
+
+/* Landscape Mode */
+@media (orientation: landscape) {
+    #boards-wrapper {
+        flex-direction: row;
+        align-items: center;
+    }
+
+    .board-container {
+        width: 45vh; /* Scale based on height */
+        max-width: 45vw;
+    }
+}
+
+/* Loader */
+.loader {
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid var(--ink-blue);
+    border-radius: 50%;
+    width: 30px;
+    height: 30px;
+    animation: spin 1s linear infinite;
+    margin: 20px auto;
+}
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
