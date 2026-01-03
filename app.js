@@ -5,7 +5,7 @@
 
 // --- CONFIGURATION ---
 // IMPORTANT: Replace this URL with your Render.com project URL
-const SIGNALING_SERVER = 'https://battleship-server-test.onrender.com'; // ЗАМЕНИТЕ НА СВОЙ URL ЕСЛИ ДЕЛАЛИ СВОЙ СЕРВЕР
+const SIGNALING_SERVER = 'https://my-battleship-server.onrender.com'; // ЗАМЕНИТЕ НА СВОЙ URL ЕСЛИ ДЕЛАЛИ СВОЙ СЕРВЕР
 
 // ICE Servers
 const ICE_SERVERS = {
