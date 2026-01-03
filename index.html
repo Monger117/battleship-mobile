@@ -21,6 +21,13 @@
                     <button id="btn-create">Create Room</button>
                     <button id="btn-join">Join Room</button>
                 </div>
+                
+                <!-- New Room Code Display -->
+                <div id="room-display" class="hidden" style="margin-top:15px; text-align:center;">
+                    <p>Room: <span style="font-weight:bold; font-size:1.2rem;"></span></p>
+                    <button id="btn-copy-link" style="font-size:0.8rem; padding:5px 10px;">Copy Invite Link 🔗</button>
+                </div>
+
                 <p id="menu-status" class="status-text">Ready to deploy.</p>
             </div>
         </div>
@@ -48,9 +55,9 @@
 
         <!-- Controls for Setup Phase -->
         <div id="setup-controls" class="controls-area">
-            <button id="btn-rotate">Rotate Ship ↻</button>
+            <button id="btn-rotate">Tap Ship to Rotate</button>
             <button id="btn-random">Randomize</button>
-            <button id="btn-ready" disabled>Ready for Battle!</button>
+            <button id="btn-ready" disabled>Ready!</button>
         </div>
         
         <!-- Waiting Message -->
@@ -60,7 +67,7 @@
         </div>
     </div>
 
-    <!-- Audio Elements (Fallback if assets missing, handled in JS via AudioContext preferred, but tags here for standard files) -->
+    <!-- Audio Elements -->
     <audio id="snd-place" src="assets/place.wav"></audio>
     <audio id="snd-rotate" src="assets/rotate.wav"></audio>
     <audio id="snd-hit" src="assets/hit.wav"></audio>
