@@ -2,21 +2,25 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const path = require('path');
 
 const app = express();
 app.use(cors());
 
+// Serve static files (HTML, CSS, JS) from the root directory
+app.use(express.static(__dirname));
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*", // Allow connections from Netlify frontend
+    origin: "*", // Allow connections from any domain (Cloudflare, localhost)
     methods: ["GET", "POST"]
   }
 });
 
-// Simple root route to check if server is running
+// Root route now serves the game instead of just text
 app.get('/', (req, res) => {
-  res.send('Battleship Signaling Server is Running');
+  res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 io.on('connection', (socket) => {
