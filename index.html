@@ -1,81 +1,161 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Paper Battleship</title>
+    <meta name="theme-color" content="#fdfbf7">
+    <title>Морской Бой: Адмирал</title>
+    
+    <!-- PWA Support -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="assets/icon-192.png">
+
     <link rel="stylesheet" href="style.css">
-    <!-- Load Socket.io Client -->
-    <!-- Force Update v1 -->
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <link rel="stylesheet" href="/index.css">
 </head>
 <body>
 
-    <div id="game-container">
-        <!-- Overlay for Connection/Menu -->
-        <div id="menu-overlay" class="paper-overlay">
-            <h1>Paper Battleship</h1>
-            <div class="menu-controls">
-                <input type="text" id="room-input" placeholder="Enter Room ID" maxlength="10">
-                <div class="button-group">
-                    <button id="btn-create">Create Room</button>
-                    <button id="btn-join">Join Room</button>
-                </div>
-                
-                <!-- New Room Code Display -->
-                <div id="room-display" class="hidden" style="margin-top:15px; text-align:center;">
-                    <p>Room: <span style="font-weight:bold; font-size:1.2rem;"></span></p>
-                    <button id="btn-copy-link" style="font-size:0.8rem; padding:5px 10px;">Copy Invite Link 🔗</button>
-                </div>
-
-                <p id="menu-status" class="status-text">Ready to deploy.</p>
-            </div>
-        </div>
-
-        <!-- Notification / Status Bar -->
-        <div id="status-bar">
-            <span id="game-status">Welcome! Place your ships.</span>
-            <button id="btn-sound" class="icon-btn">🔊</button>
-        </div>
-
-        <!-- Main Game Area -->
-        <div id="boards-wrapper">
-            <!-- Player Board -->
-            <div class="board-container" id="player-container">
-                <h2>My Fleet</h2>
-                <div class="grid" id="player-grid"></div>
-            </div>
-
-            <!-- Enemy Board -->
-            <div class="board-container" id="enemy-container">
-                <h2>Enemy Waters</h2>
-                <div class="grid" id="enemy-grid"></div>
-            </div>
-        </div>
-
-        <!-- Controls for Setup Phase -->
-        <div id="setup-controls" class="controls-area">
-            <button id="btn-rotate">Tap Ship to Rotate</button>
-            <button id="btn-random">Randomize</button>
-            <button id="btn-ready" disabled>Ready!</button>
-        </div>
+    <div id="app-container">
         
-        <!-- Waiting Message -->
-        <div id="waiting-screen" class="hidden">
-            <p>Waiting for opponent...</p>
-            <div class="loader"></div>
+        <!-- --- SCREEN: LOGIN --- -->
+        <div id="screen-login" class="screen">
+            <div class="paper-panel center-panel">
+                <h1>⚓ МОРСКОЙ БОЙ ⚓</h1>
+                <p>Вход в систему</p>
+                <input type="text" id="inp-username" placeholder="Ваш Никнейм" maxlength="12">
+                <button id="btn-login" class="btn-primary">В БОЙ!</button>
+                <div class="offline-note">Офлайн режим доступен</div>
+            </div>
         </div>
+
+        <!-- --- SCREEN: MAIN MENU --- -->
+        <div id="screen-menu" class="screen hidden">
+            <div class="profile-card">
+                <div class="avatar">👤</div>
+                <div class="profile-info">
+                    <h2 id="display-username">Игрок</h2>
+                    <p id="display-rank">Рядовой</p>
+                    <div class="xp-bar-container">
+                        <div class="xp-bar" id="xp-bar-fill"></div>
+                    </div>
+                    <small>Уровень <span id="display-level">1</span></small>
+                </div>
+            </div>
+
+            <div class="menu-grid">
+                <button id="btn-play-bot" class="menu-tile">
+                    <span>🤖</span>
+                    Игра с Ботом
+                </button>
+                <button id="btn-play-online" class="menu-tile">
+                    <span>🌍</span>
+                    Онлайн Игра
+                </button>
+                <button id="btn-friends" class="menu-tile">
+                    <span>👥</span>
+                    Друзья / Онлайн
+                </button>
+                <button id="btn-settings" class="menu-tile">
+                    <span>⚙️</span>
+                    Сброс Данных
+                </button>
+            </div>
+        </div>
+
+        <!-- --- SCREEN: FRIENDS / ONLINE --- -->
+        <div id="screen-friends" class="screen hidden">
+            <div class="paper-header">
+                <button class="btn-back" data-target="screen-menu">⬅</button>
+                <h2>В Сети</h2>
+            </div>
+            <div class="list-container" id="online-list">
+                <p class="loading-text">Поиск игроков...</p>
+            </div>
+            
+            <div class="direct-connect">
+                <h3>Вход по коду</h3>
+                <input type="text" id="room-input" placeholder="КОД КОМНАТЫ">
+                <div class="row">
+                    <button id="btn-create-room">Создать</button>
+                    <button id="btn-join-room">Войти</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- --- SCREEN: GAME --- -->
+        <div id="screen-game" class="screen hidden">
+            <!-- Game Header -->
+            <div id="status-bar">
+                <button id="btn-surrender" class="icon-btn">🏳️</button>
+                <span id="game-status">Расстановка</span>
+                <button id="btn-sound-toggle" class="icon-btn">🔇</button>
+            </div>
+
+            <!-- Game Boards -->
+            <div id="boards-wrapper">
+                <div class="board-container" id="player-container">
+                    <h2>Флот</h2>
+                    <div class="grid" id="player-grid"></div>
+                </div>
+                <div class="board-container" id="enemy-container">
+                    <h2>Радар</h2>
+                    <div class="grid" id="enemy-grid"></div>
+                </div>
+            </div>
+
+            <!-- Setup Controls -->
+            <div id="setup-controls" class="controls-area">
+                <button id="btn-rotate">Повернуть ↻</button>
+                <button id="btn-random">Случайно 🎲</button>
+                <button id="btn-ready" disabled>В БОЙ! ⚔️</button>
+            </div>
+        </div>
+
+        <!-- --- OVERLAYS --- -->
+        
+        <!-- Invite Modal -->
+        <div id="modal-invite" class="modal hidden">
+            <div class="modal-content">
+                <h3>Вызов!</h3>
+                <p><span id="inviter-name">Unknown</span> вызывает на бой!</p>
+                <div class="row">
+                    <button id="btn-accept-invite" class="btn-primary">Принять</button>
+                    <button id="btn-decline-invite" class="btn-secondary">Отмена</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- End Game Modal -->
+        <div id="modal-endgame" class="modal hidden">
+            <div class="modal-content">
+                <h1 id="end-title">ПОБЕДА</h1>
+                <p id="xp-gain">+100 XP</p>
+                <button id="btn-to-menu" class="btn-primary">В Меню</button>
+            </div>
+        </div>
+
     </div>
 
-    <!-- Audio Elements -->
+    <!-- Audio Assets -->
+    <audio id="bg-music" src="assets/music.mp3" loop></audio>
     <audio id="snd-place" src="assets/place.wav"></audio>
-    <audio id="snd-rotate" src="assets/rotate.wav"></audio>
     <audio id="snd-hit" src="assets/hit.wav"></audio>
     <audio id="snd-miss" src="assets/miss.wav"></audio>
     <audio id="snd-win" src="assets/win.wav"></audio>
+    <audio id="snd-lose" src="assets/lose.wav"></audio>
 
     <script type="module" src="app.js"></script>
+    <script>
+        // Register PWA Service Worker
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js')
+                .then(() => console.log('SW Registered'))
+                .catch(err => console.error('SW Error:', err));
+        }
+    </script>
 <script type="module" src="/index.tsx"></script>
 </body>
 </html>
