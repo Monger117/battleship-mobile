@@ -4,6 +4,7 @@
  */
 
 // --- CONFIGURATION ---
+// Replace this with your own Render URL if you deployed the server
 const SIGNALING_SERVER = 'https://my-battleship-server.onrender.com'; 
 
 // ICE Servers
@@ -58,8 +59,8 @@ const els = {
     btnRandom: document.getElementById('btn-random'),
     roomInput: document.getElementById('room-input'),
     waitingScreen: document.getElementById('waiting-screen'),
-    roomDisplay: document.getElementById('room-display'), // New
-    btnCopyLink: document.getElementById('btn-copy-link'), // New
+    roomDisplay: document.getElementById('room-display'), 
+    btnCopyLink: document.getElementById('btn-copy-link'), 
     sounds: {
         place: document.getElementById('snd-place'),
         rotate: document.getElementById('snd-rotate'),
@@ -104,7 +105,6 @@ const playSynthTone = (type) => {
         gain.gain.setValueAtTime(0.3, now);
         osc.start(now); osc.stop(now + 0.05);
     } else if (type === 'sunk') {
-        // Deeper boom for sunk
         osc.frequency.setValueAtTime(100, now);
         osc.frequency.exponentialRampToValueAtTime(10, now + 0.5);
         gain.gain.setValueAtTime(1, now);
@@ -132,7 +132,6 @@ function checkUrlParams() {
     const roomParam = urlParams.get('room');
     if (roomParam) {
         els.roomInput.value = roomParam;
-        // Optional: Auto-join could be added here, but manual click is safer for now
     }
 }
 
@@ -159,14 +158,27 @@ function createGrids() {
 // --- NETWORK ---
 
 function setupSocket() {
-    socket = io(SIGNALING_SERVER);
+    // Force new connection to avoid stale sockets
+    socket = io(SIGNALING_SERVER, {
+        reconnection: true,
+        reconnectionAttempts: 10,
+        reconnectionDelay: 2000
+    });
+
+    const statusEl = document.getElementById('menu-status');
 
     socket.on('connect', () => {
-        document.getElementById('menu-status').textContent = 'Server Online';
+        statusEl.textContent = '🟢 Server Online';
+        statusEl.style.color = '#1b4f9c';
     });
     
     socket.on('connect_error', () => {
-        document.getElementById('menu-status').textContent = 'Waking up server... (wait 1 min)';
+        statusEl.textContent = '🟡 Waking up server... please wait (can take 60s)';
+        statusEl.style.color = '#d4343a';
+    });
+
+    socket.on('disconnect', () => {
+         statusEl.textContent = '🔴 Disconnected';
     });
 
     socket.on('room-created', (id) => {
@@ -214,19 +226,25 @@ function setupSocket() {
 function updateRoomUI(id) {
     els.roomDisplay.classList.remove('hidden');
     els.roomDisplay.querySelector('span').textContent = id;
-    
-    // Update URL without reloading to make sharing easier
     const newUrl = window.location.protocol + "//" + window.location.host + window.location.pathname + '?room=' + id;
     window.history.pushState({path:newUrl},'',newUrl);
 }
 
 function setupMenuHandlers() {
     document.getElementById('btn-create').addEventListener('click', () => {
+        if (!socket.connected) {
+            alert("Server is still connecting. Please wait a moment.");
+            return;
+        }
         const id = Math.random().toString(36).substring(2, 7).toUpperCase();
         socket.emit('join-room', id);
     });
 
     document.getElementById('btn-join').addEventListener('click', () => {
+        if (!socket.connected) {
+            alert("Server is still connecting. Please wait a moment.");
+            return;
+        }
         const id = els.roomInput.value.toUpperCase();
         if (id.length > 0) {
             socket.emit('join-room', id);
@@ -252,7 +270,6 @@ function enterSetupPhase() {
 }
 
 function randomizeShips() {
-    // Clear DOM and Data
     document.querySelectorAll('.ship').forEach(s => s.remove());
     myGrid = Array(10).fill(null).map(() => Array(10).fill(null));
     myShips = [];
@@ -262,13 +279,11 @@ function randomizeShips() {
         for (let i=0; i<type.count; i++) shipsToPlace.push(type.size);
     });
 
-    // Try to place all ships. If fails, retry the whole board up to X times
     let attempts = 0;
     let success = false;
     
     while (!success && attempts < 500) {
         attempts++;
-        // Temp grid for this attempt
         let tempGrid = Array(10).fill(null).map(() => Array(10).fill(null));
         let tempShips = [];
         let placementFailed = false;
@@ -283,7 +298,6 @@ function randomizeShips() {
                 const vert = Math.random() > 0.5;
                 
                 if (canPlaceShip(x, y, size, vert, tempGrid)) {
-                    // Place in temp data
                     const shipObj = { x, y, size, vertical: vert, hits: 0, sunk: false };
                     tempShips.push(shipObj);
                     for (let i = 0; i < size; i++) {
@@ -302,41 +316,32 @@ function randomizeShips() {
 
         if (!placementFailed) {
             success = true;
-            // Apply to real game
             myGrid = tempGrid;
             myShips = tempShips;
-            // Render
             myShips.forEach(s => createShipElement(s.x, s.y, s.size, s.vertical));
         }
     }
     
     if(!success) {
         console.warn("Could not randomize ships. Try again.");
-        // Fallback or just let user click again
     } else {
         els.btnReady.disabled = false;
         playSound('place');
     }
 }
 
-// UPDATED: Strict spacing rules (1 cell gap)
 function canPlaceShip(x, y, size, vertical, grid) {
-    // 1. Boundary check
     if (vertical) { if (y + size > 10) return false; } 
     else { if (x + size > 10) return false; }
 
-    // 2. Overlap and Gap check
     for (let i = 0; i < size; i++) {
         const cx = vertical ? x : x + i;
         const cy = vertical ? y + i : y;
 
-        // Check the cell itself and all 8 neighbors
         for (let dx = -1; dx <= 1; dx++) {
             for (let dy = -1; dy <= 1; dy++) {
                 const nx = cx + dx;
                 const ny = cy + dy;
-
-                // Check board bounds
                 if (nx >= 0 && nx < 10 && ny >= 0 && ny < 10) {
                     if (grid[nx][ny] !== null) return false;
                 }
@@ -344,11 +349,6 @@ function canPlaceShip(x, y, size, vertical, grid) {
         }
     }
     return true;
-}
-
-function placeShipData(x, y, size, vertical) {
-    // Note: randomizeShips handles the full grid generation now to prevent bugs.
-    // This is kept for manual drag/drop future implementation
 }
 
 function createShipElement(x, y, size, vertical) {
@@ -367,20 +367,16 @@ function createShipElement(x, y, size, vertical) {
         ship.style.height = '10%';
     }
 
-    // Tap to rotate logic
     ship.addEventListener('click', (e) => {
         if (currentState !== STATE.SETUP) return;
         e.stopPropagation();
         
-        // Remove current ship from data
         const shipIndex = myShips.findIndex(s => s.x === x && s.y === y && s.vertical === vertical);
         if (shipIndex === -1) return;
         
-        // Temporarily clear grid spots for this ship so we can check if rotation fits
         const currentShip = myShips[shipIndex];
-        const tempGrid = myGrid.map(row => [...row]); // Deep copy rows
+        const tempGrid = myGrid.map(row => [...row]); 
         
-        // Remove ship from temp grid
         for(let i=0; i<currentShip.size; i++) {
             const cx = currentShip.vertical ? currentShip.x : currentShip.x+i;
             const cy = currentShip.vertical ? currentShip.y+i : currentShip.y;
@@ -389,20 +385,15 @@ function createShipElement(x, y, size, vertical) {
 
         const newVertical = !vertical;
         
-        // Check if rotated ship fits in the temp grid (which has the current ship removed)
         if (canPlaceShip(x, y, size, newVertical, tempGrid)) {
-            // It fits! Remove old DOM
             ship.remove();
-            // Remove from real data
             myShips.splice(shipIndex, 1);
-            // Clear real grid
             for(let i=0; i<currentShip.size; i++) {
                 const cx = currentShip.vertical ? currentShip.x : currentShip.x+i;
                 const cy = currentShip.vertical ? currentShip.y+i : currentShip.y;
                 myGrid[cx][cy] = null;
             }
 
-            // Place new
             const newShipObj = { x, y, size, vertical: newVertical, hits: 0, sunk: false };
             myShips.push(newShipObj);
             for (let i = 0; i < size; i++) {
@@ -413,7 +404,6 @@ function createShipElement(x, y, size, vertical) {
             createShipElement(x, y, size, newVertical);
             playSound('rotate');
         } else {
-            // Shake effect or feedback?
             ship.style.transform = "translateX(5px)";
             setTimeout(() => ship.style.transform = "none", 100);
         }
@@ -531,9 +521,14 @@ function handleEnemyGridClick(x, y) {
     if (enemyGrid[x][y] !== null) return; 
 
     dataChannel.send(JSON.stringify({ type: 'fire', x, y }));
-    currentState = STATE.WAITING_OPPONENT;
+    // Optimistic UI: Don't disable turn yet unless it's a miss (handled in result)
+    // But to prevent spam, we can block input temporarily
     els.status.textContent = "Firing...";
 }
+
+// ---------------------------------------------------------
+// REVISED SHOOTING LOGIC: HIT = SHOOT AGAIN
+// ---------------------------------------------------------
 
 function handleIncomingFire(x, y) {
     const cellObj = myGrid[x][y];
@@ -542,6 +537,7 @@ function handleIncomingFire(x, y) {
     let sunkShipData = null;
 
     if (cellObj && typeof cellObj === 'object') {
+        // HIT
         isHit = true;
         cellObj.hits++;
         addMarker(els.playerGrid, x, y, 'hit');
@@ -550,7 +546,6 @@ function handleIncomingFire(x, y) {
             cellObj.sunk = true;
             isSunk = true;
             playSound('sunk');
-            // Prepare data to send to opponent so they can draw the sunk ship
             sunkShipData = { x: cellObj.x, y: cellObj.y, size: cellObj.size, vertical: cellObj.vertical };
             
             if (myShips.every(s => s.sunk)) {
@@ -564,44 +559,52 @@ function handleIncomingFire(x, y) {
         } else {
             playSound('hit');
         }
+
+        // RULE: If hit, opponent shoots again. So I stay in WAITING state.
+        currentState = STATE.WAITING_OPPONENT;
+        els.status.textContent = "You were HIT! Enemy shoots again...";
+
     } else {
+        // MISS
         playSound('miss');
         addMarker(els.playerGrid, x, y, 'miss');
+        
+        // RULE: If miss, my turn.
+        currentState = STATE.MY_TURN;
+        els.status.textContent = "Enemy MISSED! Your Turn!";
     }
 
     dataChannel.send(JSON.stringify({ 
         type: 'result', x, y, hit: isHit, sunk: isSunk, ship: sunkShipData 
     }));
-    currentState = STATE.MY_TURN;
-    els.status.textContent = "Your Turn! Fire!";
 }
 
 function handleFireResult(x, y, hit, sunk, shipData) {
     enemyGrid[x][y] = hit ? 'H' : 'M';
     
     if (sunk && shipData) {
-        // Mark the specific hit that caused the sink
-        addMarker(els.enemyGrid, x, y, 'hit'); // Add hit first
-        
-        // Now visually reveal the sunk ship on the enemy board
-        // We can either draw a ship element OR change markers to 'sunk' style
+        addMarker(els.enemyGrid, x, y, 'hit');
         drawEnemySunkShip(shipData);
         playSound('sunk');
-        els.status.textContent = "SHIP SUNK! Enemy's Turn...";
+        // RULE: Sunk is a hit, so I shoot again.
+        currentState = STATE.MY_TURN; 
+        els.status.textContent = "SHIP SUNK! Shoot again!";
     } else if (hit) {
         playSound('hit');
         addMarker(els.enemyGrid, x, y, 'hit');
-        els.status.textContent = "HIT! Enemy's Turn...";
+        // RULE: Hit means I shoot again.
+        currentState = STATE.MY_TURN;
+        els.status.textContent = "HIT! Shoot again!";
     } else {
         playSound('miss');
         addMarker(els.enemyGrid, x, y, 'miss');
+        // RULE: Miss means turn over.
+        currentState = STATE.OPPONENT_TURN;
         els.status.textContent = "MISS. Enemy's Turn...";
     }
-    currentState = STATE.OPPONENT_TURN;
 }
 
 function drawEnemySunkShip(ship) {
-    // 1. Visually add the ship (like in setup) but on enemy grid
     const shipEl = document.createElement('div');
     shipEl.classList.add('ship', `ship-${ship.size}`, 'sunk-ship');
     if (ship.vertical) shipEl.classList.add('vertical');
@@ -617,14 +620,10 @@ function drawEnemySunkShip(ship) {
         shipEl.style.height = '10%';
     }
     els.enemyGrid.appendChild(shipEl);
-
-    // 2. Update markers covered by this ship to be darker/invisible?
-    // Actually, keeping the red Hit markers ON TOP of the ship looks good (classic style)
 }
 
 function addMarker(gridEl, x, y, type) {
     const cell = gridEl.querySelector(`.cell[data-x="${x}"][data-y="${y}"]`);
-    // Remove existing if any
     const existing = cell.querySelector('.marker');
     if (existing) existing.remove();
     
