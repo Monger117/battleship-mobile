@@ -1,349 +1,249 @@
 /**
- * Paper Battleship
- * Main Application Logic
+ * Paper Battleship - Admiral Edition 2.0
  */
 
-// --- CONFIGURATION ---
-// Replace this with your own Render URL if you deployed the server
-const SIGNALING_SERVER = 'https://my-battleship-server.onrender.com'; 
-
-// ICE Servers
-const ICE_SERVERS = {
-    iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
-    ]
+const CONFIG = {
+    SERVER_URL: 'https://my-battleship-server.onrender.com', // Replace if you have your own
+    ICE_SERVERS: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] },
+    XP_LEVEL_FACTOR: 200, 
+    RANKS: ["Юнга", "Матрос", "Старшина", "Мичман", "Лейтенант", "Капитан", "Командор", "Адмирал"]
 };
 
-// --- GAME STATE ---
+// --- STATE ---
 const STATE = {
-    MENU: 'MENU',
-    SETUP: 'SETUP',
-    WAITING_OPPONENT: 'WAITING_OPPONENT',
-    MY_TURN: 'MY_TURN',
-    OPPONENT_TURN: 'OPPONENT_TURN',
-    GAME_OVER: 'GAME_OVER'
+    user: { id: null, username: null, xp: 0, level: 1 },
+    socket: null,
+    peer: null,
+    dc: null, 
+    gameMode: null, // 'BOT' or 'ONLINE'
+    gameState: 'MENU',
+    isMyTurn: false,
+    sound: false,
+    roomId: null,
+    bot: null,
+    pendingInvite: null
 };
 
-const SHIPS_CONFIG = [
-    { size: 4, count: 1, id: 'battleship' },
-    { size: 3, count: 2, id: 'cruiser' },
-    { size: 2, count: 3, id: 'destroyer' },
-    { size: 1, count: 4, id: 'submarine' }
-];
+// --- DATA ---
+let myGrid = [], enemyGrid = [], myShips = [], enemyShipsSunk = 0;
+// Ships: 4x1, 3x2, 2x3, 1x4
+const SHIPS_STRUCT = [ {s:4,c:1}, {s:3,c:2}, {s:2,c:3}, {s:1,c:4} ];
 
-// Global Variables
-let currentState = STATE.MENU;
-let socket;
-let peerConnection;
-let dataChannel;
-let roomId = null;
-let isHost = false;
-
-// Game Data
-let myGrid = Array(10).fill(null).map(() => Array(10).fill(null));
-let enemyGrid = Array(10).fill(null).map(() => Array(10).fill(null));
-let myShips = []; 
-let soundEnabled = true;
-
-// DOM Elements
-const els = {
-    body: document.body,
-    playerGrid: document.getElementById('player-grid'),
-    enemyGrid: document.getElementById('enemy-grid'),
-    status: document.getElementById('game-status'),
-    menuOverlay: document.getElementById('menu-overlay'),
-    setupControls: document.getElementById('setup-controls'),
-    btnRotate: document.getElementById('btn-rotate'),
-    btnReady: document.getElementById('btn-ready'),
-    btnRandom: document.getElementById('btn-random'),
-    roomInput: document.getElementById('room-input'),
-    waitingScreen: document.getElementById('waiting-screen'),
-    roomDisplay: document.getElementById('room-display'), 
-    btnCopyLink: document.getElementById('btn-copy-link'), 
-    sounds: {
-        place: document.getElementById('snd-place'),
-        rotate: document.getElementById('snd-rotate'),
-        hit: document.getElementById('snd-hit'),
-        miss: document.getElementById('snd-miss'),
-        win: document.getElementById('snd-win')
-    }
+// --- DOM HELPERS ---
+const $ = (id) => document.getElementById(id);
+const screens = {
+    login: $('screen-login'),
+    menu: $('screen-menu'),
+    friends: $('screen-friends'),
+    game: $('screen-game')
 };
-
-// --- AUDIO SYSTEM ---
-const playSound = (name) => {
-    if (!soundEnabled) return;
-    const audioEl = els.sounds[name];
-    if (audioEl) {
-        audioEl.currentTime = 0;
-        audioEl.play().catch(e => playSynthTone(name));
-    }
-};
-
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-const playSynthTone = (type) => {
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    const now = audioCtx.currentTime;
-    
-    if (type === 'hit') {
-        osc.frequency.setValueAtTime(150, now);
-        osc.frequency.exponentialRampToValueAtTime(50, now + 0.3);
-        gain.gain.setValueAtTime(1, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
-        osc.start(now); osc.stop(now + 0.3);
-    } else if (type === 'miss') {
-        osc.frequency.setValueAtTime(400, now);
-        gain.gain.setValueAtTime(0.5, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
-        osc.start(now); osc.stop(now + 0.1);
-    } else if (type === 'place' || type === 'rotate') {
-        osc.frequency.setValueAtTime(600, now);
-        gain.gain.setValueAtTime(0.3, now);
-        osc.start(now); osc.stop(now + 0.05);
-    } else if (type === 'sunk') {
-        osc.frequency.setValueAtTime(100, now);
-        osc.frequency.exponentialRampToValueAtTime(10, now + 0.5);
-        gain.gain.setValueAtTime(1, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
-        osc.start(now); osc.stop(now + 0.5);
-    }
-};
-
-document.getElementById('btn-sound').addEventListener('click', () => {
-    soundEnabled = !soundEnabled;
-    document.getElementById('btn-sound').textContent = soundEnabled ? '🔊' : '🔇';
-});
 
 // --- INITIALIZATION ---
+window.addEventListener('load', () => {
+    loadUserData();
+    setupAudio();
+    initUI();
+    // Connect socket if we have internet, but don't block
+    if(navigator.onLine) connectSocket();
+});
 
-function init() {
-    createGrids();
-    setupSocket();
-    setupMenuHandlers();
-    checkUrlParams();
+// --- AUTH & PROGRESSION ---
+function loadUserData() {
+    const stored = localStorage.getItem('battleship_user');
+    if (stored) {
+        try {
+            STATE.user = JSON.parse(stored);
+            if(!STATE.user.id) throw new Error("No ID");
+            showScreen('menu');
+            updateProfileUI();
+        } catch(e) { showScreen('login'); }
+    } else {
+        showScreen('login');
+    }
 }
 
-function checkUrlParams() {
-    const urlParams = new URLSearchParams(window.location.search);
-    const roomParam = urlParams.get('room');
-    if (roomParam) {
-        els.roomInput.value = roomParam;
+function saveUserData() {
+    localStorage.setItem('battleship_user', JSON.stringify(STATE.user));
+    updateProfileUI();
+}
+
+function addXP(amount) {
+    STATE.user.xp += amount;
+    const newLevel = Math.floor(1 + Math.sqrt(STATE.user.xp / CONFIG.XP_LEVEL_FACTOR));
+    if (newLevel > STATE.user.level) {
+        alert(`⭐ ПОВЫШЕНИЕ! Теперь вы уровень ${newLevel}: ${CONFIG.RANKS[Math.min(newLevel-1, CONFIG.RANKS.length-1)]}`);
     }
+    STATE.user.level = newLevel;
+    saveUserData();
+}
+
+function updateProfileUI() {
+    $('display-username').textContent = STATE.user.username;
+    $('display-level').textContent = STATE.user.level;
+    
+    let rankIndex = Math.min(STATE.user.level - 1, CONFIG.RANKS.length - 1);
+    $('display-rank').textContent = CONFIG.RANKS[rankIndex];
+    
+    // XP Bar Math
+    const currentLvlXP = Math.pow(STATE.user.level - 1, 2) * CONFIG.XP_LEVEL_FACTOR;
+    const nextLvlXP = Math.pow(STATE.user.level, 2) * CONFIG.XP_LEVEL_FACTOR;
+    const range = nextLvlXP - currentLvlXP;
+    const progress = (STATE.user.xp - currentLvlXP) / range;
+    $('xp-bar-fill').style.width = `${Math.min(100, Math.max(0, progress * 100))}%`;
+}
+
+// --- UI NAVIGATION ---
+function showScreen(name) {
+    Object.values(screens).forEach(s => s.classList.add('hidden'));
+    screens[name].classList.remove('hidden');
+    
+    if (name === 'menu') {
+        if(STATE.socket && STATE.roomId) STATE.socket.emit('leave-room', STATE.roomId);
+        if(!STATE.sound) toggleSound(false); // Try auto-start music
+    }
+    if (name === 'friends') {
+        if(STATE.socket) STATE.socket.emit('get-online-users');
+    }
+}
+
+function initUI() {
+    // Login
+    $('btn-login').onclick = () => {
+        const name = $('inp-username').value.trim();
+        if (!name) return alert('Введите имя!');
+        STATE.user.username = name;
+        if (!STATE.user.id) STATE.user.id = crypto.randomUUID();
+        saveUserData();
+        if (STATE.socket) STATE.socket.emit('login', STATE.user);
+        showScreen('menu');
+    };
+
+    // Menu
+    $('btn-play-bot').onclick = startBotGame;
+    $('btn-play-online').onclick = () => {
+        if(!STATE.socket || !STATE.socket.connected) {
+            alert("Нет подключения к серверу :(");
+            connectSocket(); 
+        } else {
+            showScreen('friends');
+        }
+    };
+    $('btn-friends').onclick = $('btn-play-online').onclick;
+    $('btn-settings').onclick = () => {
+        if(confirm("Сбросить весь прогресс?")) {
+            localStorage.removeItem('battleship_user');
+            location.reload();
+        }
+    };
+
+    // Friends / Online
+    $('.btn-back').forEach(b => b.onclick = () => showScreen(b.dataset.target));
+    $('btn-create-room').onclick = () => STATE.socket.emit('join-room', Math.random().toString(36).substr(2, 5).toUpperCase());
+    $('btn-join-room').onclick = () => {
+        const val = $('room-input').value.toUpperCase();
+        if(val) STATE.socket.emit('join-room', val);
+    };
+
+    // Game
+    $('btn-rotate').onclick = () => rotateShipInSetup(); // Note: kept implementation simple, assuming randomization mostly used
+    $('btn-random').onclick = randomizeShips;
+    $('btn-ready').onclick = playerReady;
+    $('btn-surrender').onclick = () => { if(confirm("Сдаться?")) endGame(false); };
+    
+    // Modals
+    $('btn-to-menu').onclick = () => {
+        $('modal-endgame').classList.add('hidden');
+        showScreen('menu');
+    };
+    $('btn-accept-invite').onclick = acceptChallenge;
+    $('btn-decline-invite').onclick = () => $('modal-invite').classList.add('hidden');
+    $('btn-sound-toggle').onclick = () => toggleSound();
+}
+
+// --- AUDIO ---
+function setupAudio() {
+    const bg = $('bg-music');
+    bg.volume = 0.2;
+}
+function toggleSound(force) {
+    const bg = $('bg-music');
+    STATE.sound = force !== undefined ? force : !STATE.sound;
+    $('btn-sound-toggle').textContent = STATE.sound ? '🔊' : '🔇';
+    if (STATE.sound) bg.play().catch(()=>{});
+    else bg.pause();
+}
+function playSfx(id) {
+    if (STATE.sound) {
+        const el = $(`snd-${id}`);
+        if(el) { el.currentTime = 0; el.play().catch(()=>{}); }
+    }
+}
+
+// --- GAME LOGIC ---
+function resetGame() {
+    $('player-grid').innerHTML = '';
+    $('enemy-grid').innerHTML = '';
+    createGrids();
+    $('btn-ready').disabled = true;
+    $('btn-ready').textContent = "В БОЙ!";
+    $('setup-controls').classList.remove('hidden');
+    STATE.gameState = 'SETUP';
+    enemyShipsSunk = 0;
+    STATE.isMyTurn = false;
 }
 
 function createGrids() {
     for (let i = 0; i < 100; i++) {
-        const x = i % 10;
-        const y = Math.floor(i / 10);
-        
+        const x = i % 10, y = Math.floor(i / 10);
+        // Player Cell
         const pCell = document.createElement('div');
-        pCell.classList.add('cell');
-        pCell.dataset.x = x;
-        pCell.dataset.y = y;
-        els.playerGrid.appendChild(pCell);
-
+        pCell.className = 'cell'; pCell.dataset.x = x; pCell.dataset.y = y;
+        $('player-grid').appendChild(pCell);
+        // Enemy Cell
         const eCell = document.createElement('div');
-        eCell.classList.add('cell');
-        eCell.dataset.x = x;
-        eCell.dataset.y = y;
-        eCell.addEventListener('click', () => handleEnemyGridClick(x, y));
-        els.enemyGrid.appendChild(eCell);
+        eCell.className = 'cell'; eCell.dataset.x = x; eCell.dataset.y = y;
+        eCell.onclick = () => handleAttack(x, y);
+        $('enemy-grid').appendChild(eCell);
     }
-}
-
-// --- NETWORK ---
-
-function setupSocket() {
-    // Force new connection to avoid stale sockets
-    socket = io(SIGNALING_SERVER, {
-        reconnection: true,
-        reconnectionAttempts: 10,
-        reconnectionDelay: 2000
-    });
-
-    const statusEl = document.getElementById('menu-status');
-
-    socket.on('connect', () => {
-        statusEl.textContent = '🟢 Server Online';
-        statusEl.style.color = '#1b4f9c';
-    });
-    
-    socket.on('connect_error', () => {
-        statusEl.textContent = '🟡 Waking up server... please wait (can take 60s)';
-        statusEl.style.color = '#d4343a';
-    });
-
-    socket.on('disconnect', () => {
-         statusEl.textContent = '🔴 Disconnected';
-    });
-
-    socket.on('room-created', (id) => {
-        roomId = id;
-        isHost = true;
-        enterSetupPhase();
-        updateRoomUI(id);
-    });
-
-    socket.on('room-joined', (id) => {
-        roomId = id;
-        isHost = false;
-        enterSetupPhase();
-        updateRoomUI(id);
-    });
-
-    socket.on('room-full', () => {
-        alert("Room is full!");
-        els.menuOverlay.style.display = 'flex';
-    });
-
-    socket.on('ready-to-negotiate', () => {
-        console.log("Opponent joined, starting WebRTC...");
-        document.getElementById('game-status').textContent = "Opponent found! Connecting...";
-        if (isHost) startWebRTC();
-    });
-
-    socket.on('offer', async (offer) => {
-        if (!peerConnection) createPeerConnection();
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-        socket.emit('answer', { roomId, answer });
-    });
-
-    socket.on('answer', async (answer) => {
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-    });
-
-    socket.on('ice-candidate', async (candidate) => {
-        try { await peerConnection.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
-    });
-}
-
-function updateRoomUI(id) {
-    els.roomDisplay.classList.remove('hidden');
-    els.roomDisplay.querySelector('span').textContent = id;
-    const newUrl = window.location.protocol + "//" + window.location.host + window.location.pathname + '?room=' + id;
-    window.history.pushState({path:newUrl},'',newUrl);
-}
-
-function setupMenuHandlers() {
-    document.getElementById('btn-create').addEventListener('click', () => {
-        if (!socket.connected) {
-            alert("Server is still connecting. Please wait a moment.");
-            return;
-        }
-        const id = Math.random().toString(36).substring(2, 7).toUpperCase();
-        socket.emit('join-room', id);
-    });
-
-    document.getElementById('btn-join').addEventListener('click', () => {
-        if (!socket.connected) {
-            alert("Server is still connecting. Please wait a moment.");
-            return;
-        }
-        const id = els.roomInput.value.toUpperCase();
-        if (id.length > 0) {
-            socket.emit('join-room', id);
-        } else alert("Enter a room ID");
-    });
-    
-    els.btnCopyLink.addEventListener('click', () => {
-        const url = window.location.href;
-        navigator.clipboard.writeText(url).then(() => {
-            alert("Link copied! Send it to your friend.");
-        });
-    });
-}
-
-// --- SETUP PHASE ---
-
-function enterSetupPhase() {
-    currentState = STATE.SETUP;
-    els.body.classList.add('state-setup');
-    els.menuOverlay.style.display = 'none';
-    els.playerGrid.classList.add('setup-mode');
-    randomizeShips();
+    myGrid = Array(10).fill(0).map(()=>Array(10).fill(null));
+    enemyGrid = Array(10).fill(0).map(()=>Array(10).fill(null));
 }
 
 function randomizeShips() {
     document.querySelectorAll('.ship').forEach(s => s.remove());
     myGrid = Array(10).fill(null).map(() => Array(10).fill(null));
     myShips = [];
+    
+    const ships = [];
+    SHIPS_STRUCT.forEach(t => { for(let i=0; i<t.c; i++) ships.push(t.s); });
 
-    const shipsToPlace = [];
-    SHIPS_CONFIG.forEach(type => {
-        for (let i=0; i<type.count; i++) shipsToPlace.push(type.size);
+    ships.forEach(size => {
+        let placed = false;
+        while(!placed) {
+            const x = Math.floor(Math.random()*10);
+            const y = Math.floor(Math.random()*10);
+            const v = Math.random() > 0.5;
+            if(canPlace(x,y,size,v,myGrid)) {
+                placeShip(x,y,size,v);
+                placed = true;
+            }
+        }
     });
-
-    let attempts = 0;
-    let success = false;
-    
-    while (!success && attempts < 500) {
-        attempts++;
-        let tempGrid = Array(10).fill(null).map(() => Array(10).fill(null));
-        let tempShips = [];
-        let placementFailed = false;
-
-        for (let size of shipsToPlace) {
-            let placed = false;
-            let shipAttempts = 0;
-            while (!placed && shipAttempts < 100) {
-                shipAttempts++;
-                const x = Math.floor(Math.random() * 10);
-                const y = Math.floor(Math.random() * 10);
-                const vert = Math.random() > 0.5;
-                
-                if (canPlaceShip(x, y, size, vert, tempGrid)) {
-                    const shipObj = { x, y, size, vertical: vert, hits: 0, sunk: false };
-                    tempShips.push(shipObj);
-                    for (let i = 0; i < size; i++) {
-                        const cx = vert ? x : x + i;
-                        const cy = vert ? y + i : y;
-                        tempGrid[cx][cy] = shipObj;
-                    }
-                    placed = true;
-                }
-            }
-            if (!placed) {
-                placementFailed = true;
-                break;
-            }
-        }
-
-        if (!placementFailed) {
-            success = true;
-            myGrid = tempGrid;
-            myShips = tempShips;
-            myShips.forEach(s => createShipElement(s.x, s.y, s.size, s.vertical));
-        }
-    }
-    
-    if(!success) {
-        console.warn("Could not randomize ships. Try again.");
-    } else {
-        els.btnReady.disabled = false;
-        playSound('place');
-    }
+    $('btn-ready').disabled = false;
+    playSfx('place');
 }
 
-function canPlaceShip(x, y, size, vertical, grid) {
-    if (vertical) { if (y + size > 10) return false; } 
+function canPlace(x, y, size, v, grid) {
+    if (v) { if (y + size > 10) return false; } 
     else { if (x + size > 10) return false; }
-
     for (let i = 0; i < size; i++) {
-        const cx = vertical ? x : x + i;
-        const cy = vertical ? y + i : y;
-
+        const cx = v ? x : x + i;
+        const cy = v ? y + i : y;
         for (let dx = -1; dx <= 1; dx++) {
             for (let dy = -1; dy <= 1; dy++) {
-                const nx = cx + dx;
-                const ny = cy + dy;
+                const nx = cx + dx, ny = cy + dy;
                 if (nx >= 0 && nx < 10 && ny >= 0 && ny < 10) {
-                    if (grid[nx][ny] !== null) return false;
+                    if (grid[nx][ny]) return false;
                 }
             }
         }
@@ -351,293 +251,378 @@ function canPlaceShip(x, y, size, vertical, grid) {
     return true;
 }
 
-function createShipElement(x, y, size, vertical) {
-    const ship = document.createElement('div');
-    ship.classList.add('ship', `ship-${size}`);
-    if (vertical) ship.classList.add('vertical');
+function placeShip(x, y, size, v) {
+    const ship = { x, y, size, v, hits: 0, sunk: false };
+    myShips.push(ship);
+    const el = document.createElement('div');
+    el.className = `ship ship-${size} ${v?'vertical':''}`;
+    el.style.left = x*10 + '%'; el.style.top = y*10 + '%';
+    el.style.width = v ? '10%' : size*10 + '%';
+    el.style.height = v ? size*10 + '%' : '10%';
+    $('player-grid').appendChild(el);
+    for(let i=0; i<size; i++) {
+        const cx = v ? x : x + i;
+        const cy = v ? y + i : y;
+        myGrid[cx][cy] = ship;
+    }
+}
+
+function playerReady() {
+    $('setup-controls').classList.add('hidden');
+    $('game-status').textContent = "Ожидание...";
+    STATE.gameState = 'READY';
     
-    ship.style.left = `${x * 10}%`;
-    ship.style.top = `${y * 10}%`;
-    
-    if (vertical) {
-        ship.style.width = '10%'; 
-        ship.style.height = `${size * 10}%`;
+    if (STATE.gameMode === 'BOT') {
+        STATE.gameState = 'PLAYING';
+        STATE.isMyTurn = true;
+        $('game-status').textContent = "Твой ход!";
     } else {
-        ship.style.width = `${size * 10}%`;
-        ship.style.height = '10%';
+        sendData({ type: 'ready' });
     }
-
-    ship.addEventListener('click', (e) => {
-        if (currentState !== STATE.SETUP) return;
-        e.stopPropagation();
-        
-        const shipIndex = myShips.findIndex(s => s.x === x && s.y === y && s.vertical === vertical);
-        if (shipIndex === -1) return;
-        
-        const currentShip = myShips[shipIndex];
-        const tempGrid = myGrid.map(row => [...row]); 
-        
-        for(let i=0; i<currentShip.size; i++) {
-            const cx = currentShip.vertical ? currentShip.x : currentShip.x+i;
-            const cy = currentShip.vertical ? currentShip.y+i : currentShip.y;
-            tempGrid[cx][cy] = null;
-        }
-
-        const newVertical = !vertical;
-        
-        if (canPlaceShip(x, y, size, newVertical, tempGrid)) {
-            ship.remove();
-            myShips.splice(shipIndex, 1);
-            for(let i=0; i<currentShip.size; i++) {
-                const cx = currentShip.vertical ? currentShip.x : currentShip.x+i;
-                const cy = currentShip.vertical ? currentShip.y+i : currentShip.y;
-                myGrid[cx][cy] = null;
-            }
-
-            const newShipObj = { x, y, size, vertical: newVertical, hits: 0, sunk: false };
-            myShips.push(newShipObj);
-            for (let i = 0; i < size; i++) {
-                const cx = newVertical ? x : x + i;
-                const cy = newVertical ? y + i : y;
-                myGrid[cx][cy] = newShipObj;
-            }
-            createShipElement(x, y, size, newVertical);
-            playSound('rotate');
-        } else {
-            ship.style.transform = "translateX(5px)";
-            setTimeout(() => ship.style.transform = "none", 100);
-        }
-    });
-
-    els.playerGrid.appendChild(ship);
 }
 
-els.btnRandom.addEventListener('click', randomizeShips);
-els.btnReady.addEventListener('click', () => {
-    els.setupControls.classList.add('hidden');
-    els.playerGrid.classList.remove('setup-mode');
-    
-    if (dataChannel && dataChannel.readyState === 'open') {
-        dataChannel.send(JSON.stringify({ type: 'ready' }));
-        iAmReady = true;
-        currentState = STATE.WAITING_OPPONENT;
-        els.status.textContent = "Waiting for opponent...";
-        checkStartGame();
+// --- ATTACK SYSTEM ---
+function handleAttack(x, y) {
+    if (STATE.gameState !== 'PLAYING' || !STATE.isMyTurn) return;
+    if (enemyGrid[x][y]) return; // Already shot there
+
+    if (STATE.gameMode === 'BOT') {
+        processAttackAgainstBot(x, y);
     } else {
-        iAmReady = true;
-        currentState = STATE.WAITING_OPPONENT;
-        els.status.textContent = "Waiting for connection...";
-    }
-});
-
-
-// --- WebRTC ---
-function startWebRTC() {
-    createPeerConnection();
-    createOffer();
-}
-
-function createPeerConnection() {
-    if (peerConnection) return;
-    peerConnection = new RTCPeerConnection(ICE_SERVERS);
-    peerConnection.onicecandidate = (event) => {
-        if (event.candidate) socket.emit('ice-candidate', { roomId, candidate: event.candidate });
-    };
-    peerConnection.onconnectionstatechange = () => {
-        if (peerConnection.connectionState === 'disconnected') {
-            els.status.textContent = "Opponent disconnected.";
-            currentState = STATE.GAME_OVER;
-        }
-    };
-
-    if (isHost) {
-        dataChannel = peerConnection.createDataChannel("game");
-        setupDataChannel();
-    } else {
-        peerConnection.ondatachannel = (event) => {
-            dataChannel = event.channel;
-            setupDataChannel();
-        };
+        playSfx('miss'); // Optimistic
+        sendData({ type: 'fire', x, y });
     }
 }
 
-async function createOffer() {
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-    socket.emit('offer', { roomId, offer });
-}
+function receiveAttack(x, y) {
+    const target = myGrid[x][y];
+    let result = { x, y, hit: false, sunk: false, ship: null };
 
-function setupDataChannel() {
-    dataChannel.onopen = () => {
-        if (iAmReady) {
-            dataChannel.send(JSON.stringify({ type: 'ready' }));
-            els.status.textContent = "Connection established. Waiting for opponent...";
-        }
-    };
-    dataChannel.onmessage = handleDataMessage;
-}
-
-let opponentReady = false;
-let iAmReady = false;
-
-function handleDataMessage(event) {
-    const msg = JSON.parse(event.data);
-    switch (msg.type) {
-        case 'ready':
-            opponentReady = true;
-            checkStartGame();
-            break;
-        case 'fire':
-            handleIncomingFire(msg.x, msg.y);
-            break;
-        case 'result':
-            handleFireResult(msg.x, msg.y, msg.hit, msg.sunk, msg.ship);
-            break;
-        case 'gameover':
-            endGame(msg.winner === 'opponent'); 
-            break;
-    }
-}
-
-function checkStartGame() {
-    if (iAmReady && opponentReady) {
-        els.body.classList.remove('state-setup');
-        els.body.classList.add('state-playing');
-        els.waitingScreen.classList.add('hidden');
-        if (isHost) {
-            currentState = STATE.MY_TURN;
-            els.status.textContent = "Your Turn! Fire!";
-        } else {
-            currentState = STATE.OPPONENT_TURN;
-            els.status.textContent = "Enemy's Turn...";
-        }
-    }
-}
-
-// --- GAMEPLAY ---
-
-function handleEnemyGridClick(x, y) {
-    if (currentState !== STATE.MY_TURN) return;
-    if (enemyGrid[x][y] !== null) return; 
-
-    dataChannel.send(JSON.stringify({ type: 'fire', x, y }));
-    // Optimistic UI: Don't disable turn yet unless it's a miss (handled in result)
-    // But to prevent spam, we can block input temporarily
-    els.status.textContent = "Firing...";
-}
-
-// ---------------------------------------------------------
-// REVISED SHOOTING LOGIC: HIT = SHOOT AGAIN
-// ---------------------------------------------------------
-
-function handleIncomingFire(x, y) {
-    const cellObj = myGrid[x][y];
-    let isHit = false;
-    let isSunk = false;
-    let sunkShipData = null;
-
-    if (cellObj && typeof cellObj === 'object') {
+    if (target) {
         // HIT
-        isHit = true;
-        cellObj.hits++;
-        addMarker(els.playerGrid, x, y, 'hit');
+        result.hit = true;
+        target.hits++;
+        addMarker($('player-grid'), x, y, 'hit');
+        playSfx('hit');
         
-        if (cellObj.hits >= cellObj.size) {
-            cellObj.sunk = true;
-            isSunk = true;
-            playSound('sunk');
-            sunkShipData = { x: cellObj.x, y: cellObj.y, size: cellObj.size, vertical: cellObj.vertical };
-            
-            if (myShips.every(s => s.sunk)) {
-                dataChannel.send(JSON.stringify({ 
-                    type: 'result', x, y, hit: true, sunk: true, ship: sunkShipData 
-                }));
-                dataChannel.send(JSON.stringify({ type: 'gameover', winner: 'opponent' }));
-                endGame(false);
-                return;
-            }
-        } else {
-            playSound('hit');
+        if (target.hits >= target.size) {
+            target.sunk = true;
+            result.sunk = true;
+            result.ship = { x:target.x, y:target.y, size:target.size, v:target.v };
+            markSurroundingMissVisual($('player-grid'), result.ship, myGrid); // Visually mark my own board
+            playSfx('sunk');
         }
-
-        // RULE: If hit, opponent shoots again. So I stay in WAITING state.
-        currentState = STATE.WAITING_OPPONENT;
-        els.status.textContent = "You were HIT! Enemy shoots again...";
-
+        
+        // Check Defeat
+        if (myShips.every(s => s.sunk)) {
+            endGame(false);
+            if(STATE.gameMode !== 'BOT') sendData({ type: 'gameover', winner: 'opponent' });
+        }
     } else {
         // MISS
-        playSound('miss');
-        addMarker(els.playerGrid, x, y, 'miss');
-        
-        // RULE: If miss, my turn.
-        currentState = STATE.MY_TURN;
-        els.status.textContent = "Enemy MISSED! Your Turn!";
+        addMarker($('player-grid'), x, y, 'miss');
+        playSfx('miss');
+        STATE.isMyTurn = true;
+        $('game-status').textContent = "Твой ход!";
     }
 
-    dataChannel.send(JSON.stringify({ 
-        type: 'result', x, y, hit: isHit, sunk: isSunk, ship: sunkShipData 
-    }));
+    if (STATE.gameMode !== 'BOT') {
+        sendData({ type: 'result', ...result });
+        if(result.hit) {
+            STATE.isMyTurn = false;
+            $('game-status').textContent = "Враг бьет снова!";
+        }
+    }
+    return result;
 }
 
-function handleFireResult(x, y, hit, sunk, shipData) {
-    enemyGrid[x][y] = hit ? 'H' : 'M';
-    
-    if (sunk && shipData) {
-        addMarker(els.enemyGrid, x, y, 'hit');
-        drawEnemySunkShip(shipData);
-        playSound('sunk');
-        // RULE: Sunk is a hit, so I shoot again.
-        currentState = STATE.MY_TURN; 
-        els.status.textContent = "SHIP SUNK! Shoot again!";
-    } else if (hit) {
-        playSound('hit');
-        addMarker(els.enemyGrid, x, y, 'hit');
-        // RULE: Hit means I shoot again.
-        currentState = STATE.MY_TURN;
-        els.status.textContent = "HIT! Shoot again!";
+function processAttackResult(data) {
+    // Mark the enemy grid based on what happened
+    enemyGrid[data.x][data.y] = data.hit ? 'H' : 'M';
+    addMarker($('enemy-grid'), data.x, data.y, data.hit ? 'hit' : 'miss');
+
+    if (data.sunk) {
+        drawEnemySunkShip(data.ship);
+        markSurroundingMissVisual($('enemy-grid'), data.ship, enemyGrid); // Auto-surround
+        playSfx('sunk');
+        enemyShipsSunk++;
+        if(enemyShipsSunk >= 10) endGame(true);
+        $('game-status').textContent = "Убит! Стреляй!";
+        STATE.isMyTurn = true;
+    } else if (data.hit) {
+        playSfx('hit');
+        $('game-status').textContent = "Ранен! Стреляй!";
+        STATE.isMyTurn = true;
     } else {
-        playSound('miss');
-        addMarker(els.enemyGrid, x, y, 'miss');
-        // RULE: Miss means turn over.
-        currentState = STATE.OPPONENT_TURN;
-        els.status.textContent = "MISS. Enemy's Turn...";
+        playSfx('miss');
+        $('game-status').textContent = "Мимо. Ход врага.";
+        STATE.isMyTurn = false;
+        if(STATE.gameMode === 'BOT') {
+            setTimeout(() => STATE.bot.makeMove(), 1000);
+        }
+    }
+}
+
+// --- AUTO SURROUND LOGIC ---
+function markSurroundingMissVisual(gridEl, ship, dataGrid) {
+    for(let i=0; i<ship.size; i++) {
+         const cx = ship.v ? ship.x : ship.x + i;
+         const cy = ship.v ? ship.y + i : ship.y;
+         
+         for(let nx=cx-1; nx<=cx+1; nx++) {
+             for(let ny=cy-1; ny<=cy+1; ny++) {
+                 if(nx>=0 && nx<10 && ny>=0 && ny<10) {
+                     // Only mark if empty (null) or not already hit/miss
+                     // We check the DOM or the dataGrid
+                     const cell = gridEl.querySelector(`.cell[data-x="${nx}"][data-y="${ny}"]`);
+                     if(!cell.querySelector('.ship') && !cell.querySelector('.marker')) {
+                         if(dataGrid) dataGrid[nx][ny] = 'M'; // Mark logically if needed
+                         addMarker(gridEl, nx, ny, 'surround-miss');
+                     }
+                 }
+             }
+         }
     }
 }
 
 function drawEnemySunkShip(ship) {
-    const shipEl = document.createElement('div');
-    shipEl.classList.add('ship', `ship-${ship.size}`, 'sunk-ship');
-    if (ship.vertical) shipEl.classList.add('vertical');
-    
-    shipEl.style.left = `${ship.x * 10}%`;
-    shipEl.style.top = `${ship.y * 10}%`;
-    
-    if (ship.vertical) {
-        shipEl.style.width = '10%'; 
-        shipEl.style.height = `${ship.size * 10}%`;
-    } else {
-        shipEl.style.width = `${ship.size * 10}%`;
-        shipEl.style.height = '10%';
+    const el = document.createElement('div');
+    el.className = `ship ship-${ship.size} ${ship.v?'vertical':''} sunk-ship`;
+    el.style.left = ship.x*10 + '%'; el.style.top = ship.y*10 + '%';
+    el.style.width = ship.v ? '10%' : ship.size*10 + '%';
+    el.style.height = ship.v ? ship.size*10 + '%' : '10%';
+    $('enemy-grid').appendChild(el);
+}
+
+function addMarker(parent, x, y, type) {
+    const cell = parent.querySelector(`.cell[data-x="${x}"][data-y="${y}"]`);
+    if(cell && !cell.querySelector('.marker')) {
+        const m = document.createElement('div');
+        m.className = `marker ${type}`;
+        cell.appendChild(m);
     }
-    els.enemyGrid.appendChild(shipEl);
 }
 
-function addMarker(gridEl, x, y, type) {
-    const cell = gridEl.querySelector(`.cell[data-x="${x}"][data-y="${y}"]`);
-    const existing = cell.querySelector('.marker');
-    if (existing) existing.remove();
+function endGame(win) {
+    STATE.gameState = 'END';
+    const xp = win ? 150 : 25;
+    addXP(xp);
+    $('end-title').textContent = win ? "ПОБЕДА!" : "ПОРАЖЕНИЕ";
+    $('end-title').style.color = win ? 'var(--ink-blue)' : 'var(--ink-red)';
+    $('xp-gain').textContent = `+${xp} XP`;
+    $('modal-endgame').classList.remove('hidden');
+    playSfx(win ? 'win' : 'lose');
+}
+
+// --- BOT LOGIC ---
+function startBotGame() {
+    STATE.gameMode = 'BOT';
+    STATE.bot = new BotAI();
+    resetGame();
+    showScreen('game');
+}
+
+class BotAI {
+    constructor() {
+        this.grid = Array(10).fill(null).map(() => Array(10).fill(null));
+        this.ships = [];
+        this.placeShips();
+        this.huntQueue = []; 
+    }
+
+    placeShips() {
+        const tempShips = [];
+        SHIPS_STRUCT.forEach(t => { for(let i=0; i<t.c; i++) tempShips.push(t.s); });
+        tempShips.forEach(size => {
+            let placed = false;
+            while(!placed) {
+                const x = Math.floor(Math.random()*10);
+                const y = Math.floor(Math.random()*10);
+                const v = Math.random() > 0.5;
+                if(canPlace(x,y,size,v,this.grid)) {
+                    const ship = { x, y, size, v, hits: 0, sunk: false };
+                    this.ships.push(ship);
+                    for(let i=0; i<size; i++) {
+                        const cx = v ? x : x + i;
+                        const cy = v ? y + i : y;
+                        this.grid[cx][cy] = ship;
+                    }
+                    placed = true;
+                }
+            }
+        });
+    }
+
+    makeMove() {
+        if(STATE.gameState !== 'PLAYING') return;
+
+        let x, y;
+        // Hunt mode: if we have targets in queue, shoot them
+        if (this.huntQueue.length > 0) {
+            const t = this.huntQueue.shift();
+            x = t.x; y = t.y;
+        } else {
+            // Random shot
+            let attempts = 0;
+            do {
+                x = Math.floor(Math.random()*10);
+                y = Math.floor(Math.random()*10);
+                attempts++;
+            } while(this.hasShotAt(x, y) && attempts < 200);
+        }
+
+        // Just in case
+        if(this.hasShotAt(x,y)) return; 
+
+        const result = receiveAttack(x, y);
+        
+        if (result.hit && !result.sunk) {
+            // Add neighbors to hunt queue
+            [[0,1],[0,-1],[1,0],[-1,0]].forEach(([dx, dy]) => {
+                const nx = x+dx, ny = y+dy;
+                if(nx>=0 && nx<10 && ny>=0 && ny<10 && !this.hasShotAt(nx, ny)) {
+                    this.huntQueue.push({x:nx, y:ny});
+                }
+            });
+        }
+    }
+
+    hasShotAt(x, y) {
+        const cell = $('player-grid').querySelector(`.cell[data-x="${x}"][data-y="${y}"]`);
+        return !!cell.querySelector('.marker');
+    }
+}
+
+function processAttackAgainstBot(x, y) {
+    const targetShip = STATE.bot.grid[x][y];
+    let hit = false, sunk = false, shipData = null;
+
+    if (targetShip) {
+        hit = true;
+        targetShip.hits++;
+        if (targetShip.hits >= targetShip.size) {
+            sunk = true;
+            targetShip.sunk = true;
+            shipData = {x:targetShip.x, y:targetShip.y, size:targetShip.size, v:targetShip.v};
+        }
+    }
+    processAttackResult({ x, y, hit, sunk, ship: shipData });
+}
+
+
+// --- ONLINE LOGIC ---
+function connectSocket() {
+    STATE.socket = io(CONFIG.SERVER_URL);
     
-    const marker = document.createElement('div');
-    marker.classList.add('marker', type);
-    cell.appendChild(marker);
+    STATE.socket.on('connect', () => {
+        if(STATE.user.username) STATE.socket.emit('login', STATE.user);
+    });
+
+    STATE.socket.on('online-users-update', (users) => {
+        const list = $('online-list');
+        list.innerHTML = '';
+        users.forEach(u => {
+            // Don't show self
+            if(u.id === STATE.user.id) return;
+            
+            const div = document.createElement('div');
+            div.className = 'user-row';
+            div.innerHTML = `
+                <div>
+                    <span class="status-dot ${u.status}">●</span>
+                    <b>${u.username}</b>
+                </div>
+                ${u.status === 'online' ? `<button class="btn-sm" onclick="inviteUser('${u.id}')">⚔️ Вызов</button>` : '<span>В бою</span>'}
+            `;
+            list.appendChild(div);
+        });
+        if(list.children.length === 0) list.innerHTML = '<p style="text-align:center;color:#999">Никого нет онлайн :(</p>';
+    });
+
+    STATE.socket.on('challenge-received', (data) => {
+        $('inviter-name').textContent = data.fromName;
+        $('modal-invite').classList.remove('hidden');
+        STATE.pendingInvite = data.socketId;
+        playSfx('place'); // Alert sound
+    });
+
+    STATE.socket.on('match-start', (roomId) => {
+        STATE.roomId = roomId;
+        STATE.gameMode = 'ONLINE';
+        STATE.socket.emit('join-room', roomId);
+        showScreen('game');
+        resetGame();
+    });
+
+    // WebRTC standard stuff...
+    STATE.socket.on('room-created', () => { STATE.isHost = true; });
+    STATE.socket.on('room-joined', () => { STATE.isHost = false; });
+    STATE.socket.on('ready-to-negotiate', () => { if(STATE.isHost) startWebRTC(); });
+    
+    STATE.socket.on('offer', async (o) => {
+        if(!STATE.peer) createPeer();
+        await STATE.peer.setRemoteDescription(o);
+        const a = await STATE.peer.createAnswer();
+        await STATE.peer.setLocalDescription(a);
+        STATE.socket.emit('answer', {roomId: STATE.roomId, answer: a});
+    });
+    STATE.socket.on('answer', (a) => STATE.peer.setRemoteDescription(a));
+    STATE.socket.on('ice-candidate', (c) => STATE.peer.addIceCandidate(c));
 }
 
-function endGame(iWon) {
-    currentState = STATE.GAME_OVER;
-    els.status.textContent = iWon ? "VICTORY!" : "DEFEAT!";
-    if (iWon) playSound('win');
-    els.waitingScreen.classList.remove('hidden');
-    els.waitingScreen.innerHTML = `<h1>${iWon ? "YOU WON" : "YOU LOST"}</h1><button onclick="location.reload()">Play Again</button>`;
+window.inviteUser = (id) => {
+    STATE.socket.emit('send-challenge', id);
+    alert('Вызов отправлен!');
+};
+
+function acceptChallenge() {
+    $('modal-invite').classList.add('hidden');
+    STATE.socket.emit('accept-challenge', STATE.pendingInvite);
 }
 
-init();
+function startWebRTC() {
+    createPeer();
+    STATE.dc = STATE.peer.createDataChannel("game");
+    setupDC();
+    STATE.peer.createOffer().then(o => STATE.peer.setLocalDescription(o))
+        .then(() => STATE.socket.emit('offer', {roomId: STATE.roomId, offer: STATE.peer.localDescription}));
+}
+
+function createPeer() {
+    STATE.peer = new RTCPeerConnection(CONFIG.ICE_SERVERS);
+    STATE.peer.onicecandidate = e => {
+        if(e.candidate) STATE.socket.emit('ice-candidate', {roomId: STATE.roomId, candidate: e.candidate});
+    };
+    STATE.peer.ondatachannel = e => { STATE.dc = e.channel; setupDC(); };
+    STATE.peer.onconnectionstatechange = () => {
+        if(STATE.peer.connectionState === 'disconnected') {
+            alert('Соперник отключился');
+            showScreen('menu');
+        }
+    };
+}
+
+function setupDC() {
+    STATE.dc.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+        if(data.type === 'ready') checkOnlineStart();
+        if(data.type === 'fire') receiveAttack(data.x, data.y);
+        if(data.type === 'result') processAttackResult(data);
+        if(data.type === 'gameover') endGame(true);
+    };
+    if(STATE.gameState === 'READY') { sendData({type: 'ready'}); checkOnlineStart(); }
+}
+
+function sendData(obj) {
+    if(STATE.dc && STATE.dc.readyState === 'open') STATE.dc.send(JSON.stringify(obj));
+}
+
+let onlineOpponentReady = false;
+function checkOnlineStart() {
+    onlineOpponentReady = true; 
+    if(STATE.gameState === 'READY') {
+        STATE.gameState = 'PLAYING';
+        $('game-status').textContent = STATE.isHost ? "Твой ход!" : "Ход соперника...";
+        STATE.isMyTurn = STATE.isHost;
+    }
+}
